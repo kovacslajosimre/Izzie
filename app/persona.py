@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+import logging
+
+logger = logging.getLogger(__name__)
 
 PERSONA_PATH = Path(os.getenv("IZZIE_PERSONA", "persona/izzie.yaml"))
 
@@ -40,7 +43,8 @@ class Persona:
 def load_persona(path: Optional[Path] = None) -> Persona:
     path = path or PERSONA_PATH
     if not path.exists():
-        return Persona()
+            logger.warning("Persona fajl nem talalhato: %s (alapertelmezett persona)", path)
+            return Persona()
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     known = {f.name for f in Persona.__dataclass_fields__.values()}
     return Persona(**{k: v for k, v in data.items() if k in known and v is not None})
