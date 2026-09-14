@@ -42,3 +42,5 @@ uritemplate==4.2.0
 urllib3==2.7.0
 uvicorn==0.52.4
 websockets==16.1.1
+PyYAML==6.0.2
+PyYAML==6.0.3

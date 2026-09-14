@@ -1,10 +1,17 @@
+import json
 import os
+from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from google import genai
 from google.genai import errors as genai_errors
+from google.genai import types
+from pydantic import BaseModel, Field
+
+from app.persona import build_system_prompt, load_persona
+from app.text import split_sentences
 
 load_dotenv()
 
@@ -18,22 +25,69 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
 
 
-class ChatResponse(BaseModel):
-    response: str
+def sse(event: dict) -> str:
+    """Egy SSE event szerializalasa."""
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
-@app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):
+async def generate(message: str) -> AsyncIterator[str]:
+    """A modell valaszat token- es mondatszintu eventekre bontja.
+
+    Event tipusok:
+      {"type": "token",    "text": "..."}              - inkrementalis, a UI-nak
+      {"type": "sentence", "index": 0, "text": "..."}  - kesz mondat, a TTS-nek
+      {"type": "done"}
+      {"type": "error",    "message": "..."}
+    """
+    persona = load_persona()
+    system_prompt = build_system_prompt(persona)
+
+    buffer = ""
+    index = 0
+
     try:
-        result = client.models.generate_content(
+        stream = await client.aio.models.generate_content_stream(
             model=MODEL_NAME,
-            contents=req.message,
+            contents=message,
+            config=types.GenerateContentConfig(system_instruction=system_prompt),
         )
+
+        async for chunk in stream:
+            piece = chunk.text
+            if not piece:
+                continue
+
+            yield sse({"type": "token", "text": piece})
+
+            buffer += piece
+            sentences, buffer = split_sentences(buffer)
+            for sentence in sentences:
+                yield sse({"type": "sentence", "index": index, "text": sentence})
+                index += 1
+
+        tail = buffer.strip()
+        if tail:
+            yield sse({"type": "sentence", "index": index, "text": tail})
+
+        yield sse({"type": "done"})
+
     except genai_errors.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Gemini hiba: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Váratlan hiba: {e}")
-    return ChatResponse(response=result.text)
+        yield sse({"type": "error", "message": f"Gemini hiba: {e}"})
+    except Exception as e:  # noqa: BLE001
+        yield sse({"type": "error", "message": f"Varatlan hiba: {e}"})
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    return StreamingResponse(
+        generate(req.message),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # nginx ne pufferelje, ha egyszer moge kerul
+        },
+    )
 
 
 @app.get("/health")
