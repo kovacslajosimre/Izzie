@@ -68,9 +68,9 @@ async def generate(message: str, session_id: int) -> AsyncIterator[str]:
             if not piece:
                 continue
 
+            full_text += piece
             yield sse({"type": "token", "text": piece})
 
-            full_text += piece
             buffer += piece
             sentences, buffer = split_sentences(buffer)
             for sentence in sentences:
@@ -84,6 +84,12 @@ async def generate(message: str, session_id: int) -> AsyncIterator[str]:
         await memory.log_assistant_message(session_id, full_text, "complete")
         yield sse({"type": "done"})
 
+    except GeneratorExit:
+        # A kliens lelepett kozben (a StreamingResponse lezarja a generatort).
+        # Csak naplozunk, ujabb SSE eventet nem probalunk kikuldeni.
+        logger.info("Kliens megszakitotta a /chat kapcsolatot, reszleges valasz naplozasa")
+        await memory.log_assistant_message(session_id, full_text, "partial")
+        raise
     except genai_errors.APIError:
         logger.exception("Gemini API hiba a /chat streamben")
         await memory.log_assistant_message(session_id, full_text, "partial")

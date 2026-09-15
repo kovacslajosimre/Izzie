@@ -125,8 +125,8 @@ async def start_turn(user_message: str) -> int:
 
 
 async def log_assistant_message(session_id: int, content: str, status: str) -> None:
-    """Az assistant-valasz naplozasa. Ures + partial eseten nincs sor - nem hangzott el semmi."""
-    if not content.strip() and status != "complete":
+    """Az assistant-valasz naplozasa. Ures tartalom eseten (complete vagy partial) nincs sor."""
+    if not content.strip():
         return
 
     def _work() -> None:

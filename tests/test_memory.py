@@ -1,6 +1,7 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
-from app import memory
+from app import db, memory
 
 T0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
 
@@ -111,3 +112,28 @@ def test_log_message_inserts_and_returns_id(conn):
     assert row["content"] == "szia!"
     assert row["created_at"] == T0.isoformat()
     assert row["status"] == "complete"
+
+
+def test_log_assistant_message_skips_empty_content_regardless_of_status(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+
+    async def scenario():
+        session_id = await memory.start_turn("szia")
+        await memory.log_assistant_message(session_id, "   ", "complete")
+        await memory.log_assistant_message(session_id, "", "partial")
+        return session_id
+
+    session_id = asyncio.run(scenario())
+
+    conn = db.connect()
+    try:
+        roles = [
+            row["role"]
+            for row in conn.execute(
+                "SELECT role FROM messages WHERE session_id = ?", (session_id,)
+            )
+        ]
+    finally:
+        conn.close()
+
+    assert roles == ["user"]
