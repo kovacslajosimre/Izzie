@@ -13,9 +13,9 @@ _BOUNDARY = re.compile(r'([.!?…]+)(["\'»”’\)\]]*)(\s+)')
 
 # Magyar roviditesek, amik utan a pont NEM mondathatar
 _ABBREV = {
-    "pl", "ill", "stb", "kb", "vö", "vo", "ún", "un", "kb", "ti", "azaz",
+    "pl", "ill", "stb", "kb", "vö", "vo", "ún", "un", "ti", "azaz",
     "dr", "prof", "id", "ifj", "sz", "szt", "u", "krt", "em", "hrsz",
-    "min", "max", "kft", "bt", "zrt", "nyrt", "ker", "tel", "ker",
+    "min", "max", "kft", "bt", "zrt", "nyrt", "ker", "tel",
     "jan", "febr", "márc", "marc", "ápr", "apr", "jún", "jun", "júl", "jul",
     "aug", "szept", "okt", "nov", "dec",
 }

@@ -6,16 +6,21 @@ memoria-kezeleshez kelljen hozzanyulni.
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import yaml
-import logging
 
-logger = logging.getLogger(__name__)
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
-PERSONA_PATH = Path(os.getenv("IZZIE_PERSONA", "persona/izzie.yaml"))
+_persona_env = os.getenv("IZZIE_PERSONA")
+if _persona_env:
+    PERSONA_PATH = Path(_persona_env)
+    if not PERSONA_PATH.is_absolute():
+        PERSONA_PATH = REPO_ROOT / PERSONA_PATH
+else:
+    PERSONA_PATH = REPO_ROOT / "persona" / "izzie.yaml"
 
 _LENGTH_HINT = {
     "rovid": "Roviden valaszolj, altalaban nehany mondatban.",
@@ -43,8 +48,7 @@ class Persona:
 def load_persona(path: Optional[Path] = None) -> Persona:
     path = path or PERSONA_PATH
     if not path.exists():
-            logger.warning("Persona fajl nem talalhato: %s (alapertelmezett persona)", path)
-            return Persona()
+        raise FileNotFoundError(f"Persona fajl nem talalhato: {path}")
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     known = {f.name for f in Persona.__dataclass_fields__.values()}
     return Persona(**{k: v for k, v in data.items() if k in known and v is not None})

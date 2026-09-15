@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import AsyncIterator
 
@@ -14,6 +15,8 @@ from app.persona import build_system_prompt, load_persona
 from app.text import split_sentences
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Izzie Brain")
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
@@ -71,10 +74,12 @@ async def generate(message: str) -> AsyncIterator[str]:
 
         yield sse({"type": "done"})
 
-    except genai_errors.APIError as e:
-        yield sse({"type": "error", "message": f"Gemini hiba: {e}"})
-    except Exception as e:  # noqa: BLE001
-        yield sse({"type": "error", "message": f"Varatlan hiba: {e}"})
+    except genai_errors.APIError:
+        logger.exception("Gemini API hiba a /chat streamben")
+        yield sse({"type": "error", "message": "Hiba tortent a valasz generalasa kozben."})
+    except Exception:  # noqa: BLE001
+        logger.exception("Varatlan hiba a /chat streamben")
+        yield sse({"type": "error", "message": "Hiba tortent a valasz generalasa kozben."})
 
 
 @app.post("/chat")
