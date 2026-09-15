@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -38,6 +39,21 @@ class ChatRequest(BaseModel):
 def sse(event: dict) -> str:
     """Egy SSE event szerializalasa."""
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+async def _log_partial_safely(session_id: int, full_text: str) -> None:
+    """Reszleges valasz naplozasa megszakitas kozben.
+
+    A GeneratorExit/CancelledError kezelese soran az aktualis task tovabbi
+    await-jei ismet megszakitast kaphatnak (pl. egy anyio cancel scope
+    eseten, amit a StreamingResponse hasznal) - az asyncio.shield() a
+    naplozast egy kulon taskba teszi, ami a hivo megszakitasatol
+    fuggetlenul lefut, akkor is, ha a shield-re varakozas maga megszakad.
+    """
+    try:
+        await asyncio.shield(memory.log_assistant_message(session_id, full_text, "partial"))
+    except asyncio.CancelledError:
+        pass
 
 
 async def generate(message: str, session_id: int) -> AsyncIterator[str]:
@@ -88,7 +104,14 @@ async def generate(message: str, session_id: int) -> AsyncIterator[str]:
         # A kliens lelepett kozben (a StreamingResponse lezarja a generatort).
         # Csak naplozunk, ujabb SSE eventet nem probalunk kikuldeni.
         logger.info("Kliens megszakitotta a /chat kapcsolatot, reszleges valasz naplozasa")
-        await memory.log_assistant_message(session_id, full_text, "partial")
+        await _log_partial_safely(session_id, full_text)
+        raise
+    except asyncio.CancelledError:
+        # A kliens lelepeset az uvicorn/anyio taszk-megszakitassal is
+        # kezelheti - ekkor GeneratorExit helyett ez jon. Csak naplozunk,
+        # ujabb SSE eventet nem probalunk kikuldeni.
+        logger.info("A /chat taszk megszakitva, reszleges valasz naplozasa")
+        await _log_partial_safely(session_id, full_text)
         raise
     except genai_errors.APIError:
         logger.exception("Gemini API hiba a /chat streamben")
