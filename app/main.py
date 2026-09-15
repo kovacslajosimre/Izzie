@@ -23,6 +23,10 @@ client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MODEL_NAME = "gemini-3.6-flash"
 
+# Induláskor egyszer betoltjuk, hogy hianyzo/hibas persona-fajl eseten
+# az uvicorn azonnal, hangosan elszalljon, ne csak egy /chat hivasnal.
+load_persona()
+
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
