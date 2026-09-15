@@ -10,7 +10,10 @@ alakítja, még ha a hang és az arc még nincs is kész.
 - **Brain** — Python / FastAPI, a szerveren fut. Ez a repo.
 - **Kliens** — Tauri (Windows / Linux / Android), vékony, csak megjelenít. Még nem létezik.
 - **LLM** — Google Gemini API (`google-genai`), modell: `gemini-3.6-flash`.
-- **Adat** — SQLite, `~/docker/homelab-tools/appdata/izzie/db/`. Még nem létezik.
+- **Adat** — SQLite. Az útvonalat az `IZZIE_DB_PATH` env var adja meg, az
+  `IZZIE_PERSONA` mintájára. Fejlesztésben alapértelmezés a `data/izzie.db`
+  a repóban (a `data/` gitignore-olva). Dockerben majd
+  `~/docker/homelab-tools/appdata/izzie/db/`. Még nem létezik.
 
 ## Jelenlegi állapot
 
@@ -48,6 +51,11 @@ előbb kérdezz.
 3. **A persona nem kerül vissza a kódba.** Minden, ami Izzie hangneméről,
    stílusáról, önmeghatározásáról szól, a `persona/izzie.yaml`-ba tartozik.
    A `app/persona.py` csak összerakja, nem tartalmaz tartalmat.
+
+   Kivétel, ami nem kivétel: a `_LENGTH_HINT` és `_ADDRESS_HINT` sztringek a
+   kódban maradnak. Ezek nem Izzie tartalma, hanem az enum-értékek fordítása
+   prompt-utasításra — a yaml annyit mond, hogy `tegez`, a kód dolga tudni,
+   hogy ez mit jelent. Ha ezek is kimennének, a yaml prompt-motorrá hízna.
 
 4. **A system prompt egyetlen helyen áll össze:** `build_system_prompt()`.
    Futásidejű kontextust (idő, memória, naptár) kizárólag a `context` paraméteren
@@ -93,6 +101,6 @@ előbb kérdezz.
 
 ```
 cd ~/projects/Izzie
-source .venv/bin/activate
+source venv/bin/activate
 uvicorn app.main:app --reload
 ```

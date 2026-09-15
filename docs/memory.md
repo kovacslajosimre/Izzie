@@ -43,6 +43,7 @@ CREATE TABLE messages (
   role        TEXT NOT NULL,            -- 'user' | 'assistant'
   content     TEXT NOT NULL,
   created_at  TEXT NOT NULL,
+  status      TEXT NOT NULL,            -- 'complete' | 'partial'
   redacted_at TEXT                      -- lásd: Felejtés
 );
 
@@ -178,6 +179,47 @@ Az extractor-prompt, a `kind` besorolás, a supersede-logika, az éjszakai job.
 
 **4. Explicit parancsok.**
 „Jegyezd meg" és „felejtsd el", a redakcióval együtt.
+
+## Megvalósítási döntések
+
+Ezek az 1. szelet megkezdése előtt dőltek el, a kód átnézése nyomán.
+
+**DB-hozzáférés.** Stdlib `sqlite3`, a blokkoló hívások `asyncio.to_thread`-del
+kiszervezve. Nem `aiosqlite` — az is szálpoolt használ belül, tehát új
+függőséget vennénk fel ugyanazért a viselkedésért. WAL mód bekapcsolva, hogy
+az olvasás ne akadjon el írás közben.
+
+**Migráció.** Nem külső eszköz, de nem is `CREATE TABLE IF NOT EXISTS`.
+A SQLite `PRAGMA user_version` mezőjét használjuk: induláskor megnézzük,
+hányas verziónál tart a séma, és sorban lefuttatjuk a hiányzó lépéseket.
+Tíz sor kód, és amikor a séma változik, nem találgatás lesz.
+
+**A `facts` tábla már az 1. szeletben létrejön,** üresen. Egy tábla
+létrehozása ingyen van, viszont így egy migrációs lépés lesz kettő helyett.
+
+**Session-hozzárendelés.** Nincs kliensoldali session azonosító, a
+`ChatRequest` nem bővül. Minden `/chat` híváskor a szerver megnézi a nyitott
+sessiont: ha annak utolsó üzenete 30 percnél régebbi, lezárja
+(`ended_at`, `closed_by = 'timeout'`), és nyit egy újat. Lusta kiértékelés,
+nem kell hozzá időzítő.
+
+**Az 1. szeletben a lezárás csupasz könyvelés.** Extractor nincs, az a
+3. szelet. A `closed_by = 'nightly'` és az éjszakai job szintén a 3. szelet —
+amíg nincs mit kivonatolni, nincs mit futtatni, és a lusta lezárás miatt
+nem marad árván nyitott session.
+
+**`closed_by = 'manual'`** marad az enumban, de nincs hozzá endpoint.
+Felkészülés egy későbbi explicit „beszélgetés lezárása" akcióra.
+
+**DB-útvonal.** `IZZIE_DB_PATH` env var, az `IZZIE_PERSONA` mintájára.
+Fejlesztésben alapértelmezés `data/izzie.db` a repóban, a `data/` gitignore-olva.
+A szülőkönyvtárat az alkalmazás hozza létre, ha nem létezik.
+
+**Megszakadt válasz naplózása.** Ha a generálás hibára fut, az addig
+összegyűlt részleges válasz **bekerül** a `messages` táblába — elhangzott,
+a nyers napló pedig az igazság forrása. De nem úgy, mintha befejeződött
+volna: a `messages.status` mező `'complete'` vagy `'partial'`. A `partial`
+üzenetek nem kerülnek az extractor bemenetébe.
 
 ## Nyitott kérdések
 
