@@ -5,22 +5,15 @@ sokszor fogsz piszkalni, es nem akarod, hogy kozben a
 memoria-kezeleshez kelljen hozzanyulni.
 """
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from app.paths import resolve_path
 
-_persona_env = os.getenv("IZZIE_PERSONA")
-if _persona_env:
-    PERSONA_PATH = Path(_persona_env)
-    if not PERSONA_PATH.is_absolute():
-        PERSONA_PATH = REPO_ROOT / PERSONA_PATH
-else:
-    PERSONA_PATH = REPO_ROOT / "persona" / "izzie.yaml"
+PERSONA_PATH = resolve_path("IZZIE_PERSONA", "persona/izzie.yaml")
 
 _LENGTH_HINT = {
     "rovid": "Roviden valaszolj, altalaban nehany mondatban.",

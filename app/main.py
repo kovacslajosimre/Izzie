@@ -11,6 +11,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, Field
 
+from app import db, memory
 from app.persona import build_system_prompt, load_persona
 from app.text import split_sentences
 
@@ -23,9 +24,11 @@ client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MODEL_NAME = "gemini-3.6-flash"
 
-# Induláskor egyszer betoltjuk, hogy hianyzo/hibas persona-fajl eseten
-# az uvicorn azonnal, hangosan elszalljon, ne csak egy /chat hivasnal.
+# Induláskor egyszer betoltjuk/lefuttatjuk, hogy hianyzo/hibas persona-fajl
+# vagy DB-migracio eseten az uvicorn azonnal, hangosan elszalljon, ne csak
+# egy /chat hivasnal.
 load_persona()
+db.connect().close()
 
 
 class ChatRequest(BaseModel):
@@ -37,7 +40,7 @@ def sse(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
-async def generate(message: str) -> AsyncIterator[str]:
+async def generate(message: str, session_id: int) -> AsyncIterator[str]:
     """A modell valaszat token- es mondatszintu eventekre bontja.
 
     Event tipusok:
@@ -50,6 +53,7 @@ async def generate(message: str) -> AsyncIterator[str]:
     system_prompt = build_system_prompt(persona)
 
     buffer = ""
+    full_text = ""
     index = 0
 
     try:
@@ -66,6 +70,7 @@ async def generate(message: str) -> AsyncIterator[str]:
 
             yield sse({"type": "token", "text": piece})
 
+            full_text += piece
             buffer += piece
             sentences, buffer = split_sentences(buffer)
             for sentence in sentences:
@@ -76,20 +81,24 @@ async def generate(message: str) -> AsyncIterator[str]:
         if tail:
             yield sse({"type": "sentence", "index": index, "text": tail})
 
+        await memory.log_assistant_message(session_id, full_text, "complete")
         yield sse({"type": "done"})
 
     except genai_errors.APIError:
         logger.exception("Gemini API hiba a /chat streamben")
+        await memory.log_assistant_message(session_id, full_text, "partial")
         yield sse({"type": "error", "message": "Hiba tortent a valasz generalasa kozben."})
     except Exception:  # noqa: BLE001
         logger.exception("Varatlan hiba a /chat streamben")
+        await memory.log_assistant_message(session_id, full_text, "partial")
         yield sse({"type": "error", "message": "Hiba tortent a valasz generalasa kozben."})
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    session_id = await memory.start_turn(req.message)
     return StreamingResponse(
-        generate(req.message),
+        generate(req.message, session_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

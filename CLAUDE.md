@@ -73,7 +73,9 @@ előbb kérdezz.
    és ne tedd be példakódba. A `GEMINI_API_KEY` ott van.
 
 8. **A `requirements.txt` csak közvetlen függőségeket tartalmaz,** rögzített
-   verzióval. Tranzitív függőség nem kerül bele.
+   verzióval. Tranzitív függőség nem kerül bele. Fejlesztői/teszt-függőségek
+   (pl. `pytest`) a `requirements-dev.txt`-be kerülnek, ugyanígy rögzített
+   verzióval.
 
 ## Konvenciók
 
