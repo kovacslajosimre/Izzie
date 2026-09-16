@@ -126,6 +126,100 @@ def test_generate_logs_nothing_if_disconnect_before_any_token(tmp_path, monkeypa
     assert calls == []
 
 
+async def _fake_stream_hangs():
+    await asyncio.sleep(999)
+    yield _Chunk("sosem erkezik meg")  # pragma: no cover
+
+
+async def _fake_stream_hangs_after_one_chunk():
+    yield _Chunk("Szia")
+    await asyncio.sleep(999)
+    yield _Chunk("sosem erkezik meg")  # pragma: no cover
+
+
+def test_generate_sends_error_on_first_chunk_timeout_and_logs_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+
+    from app import main
+
+    monkeypatch.setattr(main, "FIRST_CHUNK_TIMEOUT_SECONDS", 0.05)
+
+    async def fake_generate_content_stream(**kwargs):
+        return _fake_stream_hangs()
+
+    monkeypatch.setattr(
+        main.client.aio.models, "generate_content_stream", fake_generate_content_stream
+    )
+
+    async def scenario():
+        session_id = await main.memory.start_turn("teszt")
+        events = [event async for event in main.generate("teszt", session_id)]
+        return session_id, events
+
+    session_id, events = asyncio.run(scenario())
+
+    assert events == [
+        main.sse(
+            {
+                "type": "error",
+                "message": "Izzie most nem kapott választ a modelltől. Próbáld újra.",
+            }
+        )
+    ]
+
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT content, status FROM messages WHERE session_id = ? AND role = 'assistant'",
+            (session_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == []
+
+
+def test_generate_sends_error_on_chunk_idle_timeout_and_logs_partial(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+
+    from app import main
+
+    monkeypatch.setattr(main, "CHUNK_IDLE_TIMEOUT_SECONDS", 0.05)
+
+    async def fake_generate_content_stream(**kwargs):
+        return _fake_stream_hangs_after_one_chunk()
+
+    monkeypatch.setattr(
+        main.client.aio.models, "generate_content_stream", fake_generate_content_stream
+    )
+
+    async def scenario():
+        session_id = await main.memory.start_turn("teszt")
+        events = [event async for event in main.generate("teszt", session_id)]
+        return session_id, events
+
+    session_id, events = asyncio.run(scenario())
+
+    assert events == [
+        main.sse({"type": "token", "text": "Szia"}),
+        main.sse(
+            {
+                "type": "error",
+                "message": "Izzie most nem kapott választ a modelltől. Próbáld újra.",
+            }
+        ),
+    ]
+
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT content, status FROM messages WHERE session_id = ? AND role = 'assistant'",
+            (session_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [(row["content"], row["status"]) for row in rows] == [("Szia", "partial")]
+
+
 def test_to_gemini_contents_maps_merges_and_drops_leading_model(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
 

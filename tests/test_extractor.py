@@ -392,6 +392,37 @@ def test_process_session_api_error_increments_attempts(tmp_path, monkeypatch):
     assert row["extract_attempts"] == 1
 
 
+def test_process_session_timeout_increments_attempts(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+    monkeypatch.setattr(extractor, "EXTRACTOR_TIMEOUT_SECONDS", 0.05)
+
+    conn = db.connect()
+    session_id = memory._create_session(conn, T0)
+    conn.commit()
+    memory.log_message(conn, session_id, "user", "Szia", "complete", created_at=T0)
+    conn.close()
+
+    class _HangingModels:
+        async def generate_content(self, **kwargs):
+            await asyncio.sleep(999)
+            raise AssertionError("nem szabadna ide eljutni")  # pragma: no cover
+
+    fake_client = SimpleNamespace(aio=SimpleNamespace(models=_HangingModels()))
+
+    asyncio.run(extractor.process_session(fake_client, session_id, now=T0))
+
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            "SELECT extracted_at, extract_attempts FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row["extracted_at"] is None
+    assert row["extract_attempts"] == 1
+
+
 def test_process_session_unparseable_json_increments_attempts(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
 

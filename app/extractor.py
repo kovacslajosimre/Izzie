@@ -37,6 +37,7 @@ EXTRACTOR_VERSION = "v2"
 EXTRACTOR_MODEL = "gemini-3.6-flash"  # kulon konstans, ld. docs/memory.md
 EXTRACT_GRACE_SECONDS = 120
 MAX_EXTRACT_ATTEMPTS = 3
+EXTRACTOR_TIMEOUT_SECONDS = 120
 
 _KINDS = {"identity", "preference", "project", "relationship", "event"}
 _ACTIONS = {"new", "supersede"}
@@ -131,16 +132,17 @@ async def _call_llm(client: genai.Client, session_input: SessionInput) -> Extrac
     prompt = load_extractor_prompt()
     input_text = _format_session_input(session_input)
 
-    response = await client.aio.models.generate_content(
-        model=EXTRACTOR_MODEL,
-        contents=input_text,
-        config=types.GenerateContentConfig(
-            system_instruction=prompt,
-            response_mime_type="application/json",
-            response_schema=ExtractionResult,
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        ),
-    )
+    async with asyncio.timeout(EXTRACTOR_TIMEOUT_SECONDS):
+        response = await client.aio.models.generate_content(
+            model=EXTRACTOR_MODEL,
+            contents=input_text,
+            config=types.GenerateContentConfig(
+                system_instruction=prompt,
+                response_mime_type="application/json",
+                response_schema=ExtractionResult,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            ),
+        )
     if response.parsed is None:
         raise ValueError("Az extractor valasza nem ertelmezheto JSON-kent.")
     return response.parsed

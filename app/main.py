@@ -26,6 +26,8 @@ client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MODEL_NAME = "gemini-3.6-flash"
 BACKGROUND_INTERVAL_SECONDS = 300
+FIRST_CHUNK_TIMEOUT_SECONDS = 30
+CHUNK_IDLE_TIMEOUT_SECONDS = 30
 
 # Induláskor egyszer betoltjuk/lefuttatjuk, hogy hianyzo/hibas persona- vagy
 # extractor-prompt-fajl, hianyzo/ures API-token, vagy DB-migracio eseten az
@@ -116,6 +118,41 @@ async def _log_partial_safely(session_id: int, full_text: str) -> None:
         pass
 
 
+async def _next_chunk_or_none(stream_iter):
+    """StopAsyncIteration -> None, hogy a hivo ciklus egyszeruen zarhasson."""
+    try:
+        return await stream_iter.__anext__()
+    except StopAsyncIteration:
+        return None
+
+
+async def _close_stream_safely(stream) -> None:
+    """A Gemini-stream lezarasa idokorlat utan, hogy ne maradjon nyitva a
+    kapcsolat a hatterben."""
+    if stream is None:
+        return
+    try:
+        await stream.aclose()
+    except Exception:  # noqa: BLE001
+        logger.exception("Hiba a Gemini-stream lezarasa kozben idokorlat utan")
+
+
+async def _handle_stream_timeout(
+    stream, session_id: int, full_text: str, timeout_kind: str, timeout_seconds: float
+) -> str:
+    """Kozos ag a ket idokorlat-esetre: stream lezarasa, reszleges valasz
+    naplozasa, es a kliensnek kikuldendo error-esemeny elokeszitese. Igy a
+    ket eset (elso darab / darabok kozott) nem tud szetcsuszni."""
+    logger.warning(
+        "Gemini nem valaszolt idoben a /chat streamben (%s, idokorlat: %ss)",
+        timeout_kind,
+        timeout_seconds,
+    )
+    await _close_stream_safely(stream)
+    await memory.log_assistant_message(session_id, full_text, "partial")
+    return sse({"type": "error", "message": "Izzie most nem kapott választ a modelltől. Próbáld újra."})
+
+
 def to_gemini_contents(history: list[dict]) -> list[types.Content]:
     """Az elozmenyt a Gemini tobbfordulos `contents` formatumara alakitja.
 
@@ -154,34 +191,51 @@ async def generate(message: str, session_id: int) -> AsyncIterator[str]:
     buffer = ""
     full_text = ""
     index = 0
+    stream = None
 
     try:
         context = await memory.load_turn_context(session_id, message)
         system_prompt = build_system_prompt(persona, {"memory": context["memory"]})
         contents = to_gemini_contents(context["history"])
 
-        stream = await client.aio.models.generate_content_stream(
-            model=MODEL_NAME,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-            ),
-        )
+        try:
+            async with asyncio.timeout(FIRST_CHUNK_TIMEOUT_SECONDS):
+                stream = await client.aio.models.generate_content_stream(
+                    model=MODEL_NAME,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                    ),
+                )
+                stream_iter = stream.__aiter__()
+                chunk = await _next_chunk_or_none(stream_iter)
+        except TimeoutError:
+            yield await _handle_stream_timeout(
+                stream, session_id, full_text, "elso darab", FIRST_CHUNK_TIMEOUT_SECONDS
+            )
+            return
 
-        async for chunk in stream:
+        while chunk is not None:
             piece = chunk.text
-            if not piece:
-                continue
+            if piece:
+                full_text += piece
+                yield sse({"type": "token", "text": piece})
 
-            full_text += piece
-            yield sse({"type": "token", "text": piece})
+                buffer += piece
+                sentences, buffer = split_sentences(buffer)
+                for sentence in sentences:
+                    yield sse({"type": "sentence", "index": index, "text": sentence})
+                    index += 1
 
-            buffer += piece
-            sentences, buffer = split_sentences(buffer)
-            for sentence in sentences:
-                yield sse({"type": "sentence", "index": index, "text": sentence})
-                index += 1
+            try:
+                async with asyncio.timeout(CHUNK_IDLE_TIMEOUT_SECONDS):
+                    chunk = await _next_chunk_or_none(stream_iter)
+            except TimeoutError:
+                yield await _handle_stream_timeout(
+                    stream, session_id, full_text, "ket adatdarab kozott", CHUNK_IDLE_TIMEOUT_SECONDS
+                )
+                return
 
         tail = buffer.strip()
         if tail:
@@ -206,11 +260,11 @@ async def generate(message: str, session_id: int) -> AsyncIterator[str]:
     except genai_errors.APIError:
         logger.exception("Gemini API hiba a /chat streamben")
         await memory.log_assistant_message(session_id, full_text, "partial")
-        yield sse({"type": "error", "message": "Hiba tortent a valasz generalasa kozben."})
+        yield sse({"type": "error", "message": "Hiba történt a válasz generálása közben."})
     except Exception:  # noqa: BLE001
         logger.exception("Varatlan hiba a /chat streamben")
         await memory.log_assistant_message(session_id, full_text, "partial")
-        yield sse({"type": "error", "message": "Hiba tortent a valasz generalasa kozben."})
+        yield sse({"type": "error", "message": "Hiba történt a válasz generálása közben."})
 
 
 @protected_router.post("/chat")

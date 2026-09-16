@@ -29,6 +29,9 @@ Kész:
 - Szerver-előkészítés a kliensnek — bearer token minden végponton a `/health`
   kivételével (`app/auth.py`, `APIRouter(dependencies=[...])`), CORS a Tauri
   ablaknak; lásd [docs/client.md](docs/client.md)
+- Időkorlát a Gemini-hívásokon — chat: első darab és darabok közötti
+  időkorlát (`app/main.py`), extractor: teljes hívásra (`app/extractor.py`);
+  lásd [docs/client.md](docs/client.md)
 
 Nincs kész: óra/időkontextus, naptár, fájlkeresés, kliens, hang, Docker.
 
