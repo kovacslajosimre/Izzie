@@ -201,3 +201,42 @@ def test_generate_sends_full_history_and_core_profile_to_gemini(tmp_path, monkey
         ("user", "Mostani kérdés"),
     ]
     assert "A felhasználó neve Lajos." in captured["config"].system_instruction
+
+
+def test_background_cycle_loop_continues_after_run_cycle_error(tmp_path, monkeypatch):
+    """Ha az elso kor hibara fut, a ciklus logolja es folytatja - eljut a
+    masodik korig. A sleep ki van valtva, hogy a teszt ne varjon valoban."""
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+
+    from app import main
+
+    calls = []
+
+    async def fake_run_cycle(client):
+        calls.append(client)
+        if len(calls) == 1:
+            raise RuntimeError("szimulalt hiba az elso korben")
+
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(seconds):
+        await real_sleep(0)
+
+    monkeypatch.setattr(main.extractor, "run_cycle", fake_run_cycle)
+    monkeypatch.setattr(main.asyncio, "sleep", fake_sleep)
+
+    async def scenario():
+        task = asyncio.create_task(main._background_cycle_loop())
+        for _ in range(1000):
+            if len(calls) >= 2:
+                break
+            await real_sleep(0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+    assert len(calls) >= 2

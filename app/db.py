@@ -50,7 +50,12 @@ CREATE INDEX idx_facts_active     ON facts(kind)
   WHERE superseded_by IS NULL AND deleted_at IS NULL;
 """
 
-MIGRATIONS = [_SCHEMA_V1]
+_SCHEMA_V2 = """
+ALTER TABLE sessions ADD COLUMN extracted_at     TEXT;
+ALTER TABLE sessions ADD COLUMN extract_attempts INTEGER NOT NULL DEFAULT 0;
+"""
+
+MIGRATIONS = [_SCHEMA_V1, _SCHEMA_V2]
 
 
 def connect() -> sqlite3.Connection:

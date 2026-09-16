@@ -1,8 +1,9 @@
 # Memória modul
 
-Státusz: 1-2. szelet (séma, írás, visszakeresés és mag-profil) megvalósítva —
-`app/db.py`, `app/memory.py`, bekötve az `app/main.py` `generate()`-jébe.
-A 3-4. szelet (extractor, explicit parancsok) nem kezdődött el.
+Státusz: 1-3. szelet (séma, írás, visszakeresés, mag-profil, háttér-extractor
+és kiváltás) megvalósítva — `app/db.py`, `app/memory.py`, `app/extractor.py`,
+bekötve az `app/main.py`-ba (`generate()` és a lifespan háttérciklusa).
+A 4. szelet (explicit parancsok) nem kezdődött el.
 Kapcsolódó: [../CLAUDE.md](../CLAUDE.md)
 
 ## Mit old meg

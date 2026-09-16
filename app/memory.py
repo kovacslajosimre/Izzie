@@ -92,6 +92,26 @@ def resolve_session(conn: sqlite3.Connection, now: Optional[datetime] = None) ->
     return session_id
 
 
+def close_expired_sessions(conn: sqlite3.Connection, now: Optional[datetime] = None) -> list[int]:
+    """A lejart nyitott sessionok lezarasa, uj session nyitasa nelkul.
+
+    A hatterciklus hasznalja - a resolve_session() erre nem jo, mert az a
+    legfrissebb lejart sessiont is lezarna, de rogton nyitna helyette egy
+    ujat. Minden nyitott session a sajat inaktivitasi idejet nezi.
+    """
+    now = now or _now()
+    rows = conn.execute("SELECT id, started_at FROM sessions WHERE ended_at IS NULL").fetchall()
+
+    closed = []
+    for row in rows:
+        last_activity = _last_activity(conn, row["id"], row["started_at"])
+        if _minutes_between(last_activity, now) >= SESSION_TIMEOUT_MINUTES:
+            _close_session(conn, row["id"], now)
+            closed.append(row["id"])
+    conn.commit()
+    return closed
+
+
 def _last_activity(conn: sqlite3.Connection, session_id: int, started_at: str) -> datetime:
     row = conn.execute(
         "SELECT MAX(created_at) FROM messages WHERE session_id = ?", (session_id,)
@@ -236,13 +256,41 @@ def retrieve(conn: sqlite3.Connection, query: str, k: int = 5) -> list[Fact]:
     return [fact for _, _, fact in scored[:k]]
 
 
-def format_memory(core: list[Fact], relevant: list[Fact]) -> str:
-    """A mag-profilbol es a visszakeresett tenyekbol osszerakja a promptba
-    kerulo memoria-blokkot. Ures bemenetre ures sztring."""
+@dataclass
+class PreviousSummary:
+    summary: str
+    ended_at: str
+
+
+def previous_session_summary(
+    conn: sqlite3.Connection, current_session_id: int
+) -> Optional[PreviousSummary]:
+    """A legutobbi, osszefoglalobal rendelkezo, lezart session osszefoglalasa,
+    ha az nem az aktualis session. Nincs ilyen -> None."""
+    row = conn.execute(
+        "SELECT summary, ended_at FROM sessions "
+        "WHERE id != ? AND ended_at IS NOT NULL AND summary IS NOT NULL "
+        "ORDER BY ended_at DESC LIMIT 1",
+        (current_session_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return PreviousSummary(summary=row["summary"], ended_at=row["ended_at"])
+
+
+def format_memory(
+    core: list[Fact], relevant: list[Fact], previous: Optional[PreviousSummary] = None
+) -> str:
+    """A mag-profilbol, az elozo beszelgetes osszefoglalojabol es a
+    visszakeresett tenyekbol osszerakja a promptba kerulo memoria-blokkot.
+    Ures bemenetre ures sztring."""
     parts = []
     if core:
         lines = "\n".join(f"- {fact.content}" for fact in core)
         parts.append(f"A felhasználóról:\n{lines}")
+    if previous:
+        date = previous.ended_at[:10]
+        parts.append(f"Az előző beszélgetés ({date}):\n{previous.summary}")
     if relevant:
         lines = "\n".join(f"- {fact.content}" for fact in relevant)
         parts.append(f"Ami most releváns lehet:\n{lines}")
@@ -250,7 +298,8 @@ def format_memory(core: list[Fact], relevant: list[Fact]) -> str:
 
 
 async def load_turn_context(session_id: int, user_message: str) -> dict:
-    """Egy kapcsolatban beolvassa az elozmenyt, a mag-profilt es a talalatokat.
+    """Egy kapcsolatban beolvassa az elozmenyt, a mag-profilt, az elozo
+    beszelgetes osszefoglalojat es a talalatokat.
 
     Visszaadja: {"history": [...], "memory": "..."}. A `generate()` ezt a
     try blokkon belul hivja, hogy DB-hiba eseten is error event menjen ki.
@@ -262,7 +311,8 @@ async def load_turn_context(session_id: int, user_message: str) -> dict:
             history = get_history(conn, session_id)
             core = core_profile(conn)
             relevant = retrieve(conn, user_message)
-            return {"history": history, "memory": format_memory(core, relevant)}
+            previous = previous_session_summary(conn, session_id)
+            return {"history": history, "memory": format_memory(core, relevant, previous)}
         finally:
             conn.close()
 

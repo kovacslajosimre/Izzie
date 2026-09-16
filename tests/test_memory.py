@@ -304,3 +304,129 @@ def test_format_memory_omits_empty_part():
     result = memory.format_memory(core, [])
 
     assert result == "A felhasználóról:\n- Nev: Lajos."
+
+
+def test_close_expired_sessions_closes_stale_without_opening_new(conn):
+    session_id = memory.resolve_session(conn, now=T0)
+    memory.log_message(conn, session_id, "user", "szia", "complete", created_at=T0)
+
+    later = T0 + timedelta(minutes=31)
+    closed = memory.close_expired_sessions(conn, now=later)
+
+    assert closed == [session_id]
+    row = conn.execute(
+        "SELECT ended_at, closed_by FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+    assert row["ended_at"] == later.isoformat()
+    assert row["closed_by"] == "timeout"
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+
+
+def test_close_expired_sessions_leaves_fresh_session_open(conn):
+    session_id = memory.resolve_session(conn, now=T0)
+    memory.log_message(conn, session_id, "user", "szia", "complete", created_at=T0)
+
+    later = T0 + timedelta(minutes=10)
+    closed = memory.close_expired_sessions(conn, now=later)
+
+    assert closed == []
+    row = conn.execute("SELECT ended_at FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    assert row["ended_at"] is None
+
+
+def test_previous_session_summary_returns_most_recent_excluding_current(conn):
+    older_id = memory._create_session(conn, T0)
+    conn.commit()
+    conn.execute(
+        "UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?",
+        ((T0 + timedelta(hours=1)).isoformat(), "Regi tema.", older_id),
+    )
+
+    newer_id = memory._create_session(conn, T0 + timedelta(hours=2))
+    conn.commit()
+    conn.execute(
+        "UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?",
+        ((T0 + timedelta(hours=3)).isoformat(), "Kozepso tema.", newer_id),
+    )
+
+    current_id = memory._create_session(conn, T0 + timedelta(hours=4))
+    conn.commit()
+    # az aktualis sessionnek is legyen sajat (a legfrissebb) osszefoglaloja,
+    # hogy bizonyitsuk: a kizaras id szerint tortenik, nem csak dátum szerint
+    conn.execute(
+        "UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?",
+        ((T0 + timedelta(hours=5)).isoformat(), "Sajat tema.", current_id),
+    )
+    conn.commit()
+
+    result = memory.previous_session_summary(conn, current_id)
+
+    assert result == memory.PreviousSummary(
+        summary="Kozepso tema.", ended_at=(T0 + timedelta(hours=3)).isoformat()
+    )
+
+
+def test_previous_session_summary_none_when_no_summarized_session(conn):
+    session_id = memory.resolve_session(conn, now=T0)
+
+    assert memory.previous_session_summary(conn, session_id) is None
+
+
+def test_format_memory_includes_previous_summary_between_core_and_relevant():
+    core = [memory.Fact(id=1, kind="identity", content="Nev: Lajos.", pinned=True, created_at=T0.isoformat())]
+    relevant = [memory.Fact(id=2, kind="project", content="Szerver otthon van.", pinned=False, created_at=T0.isoformat())]
+    previous = memory.PreviousSummary(summary="Szoba volt a tema.", ended_at="2026-09-16T10:00:00+00:00")
+
+    result = memory.format_memory(core, relevant, previous)
+
+    assert result == (
+        "A felhasználóról:\n- Nev: Lajos.\n\n"
+        "Az előző beszélgetés (2026-09-16):\nSzoba volt a tema.\n\n"
+        "Ami most releváns lehet:\n- Szerver otthon van."
+    )
+
+
+def test_format_memory_previous_only():
+    previous = memory.PreviousSummary(summary="X.", ended_at="2026-09-16T10:00:00+00:00")
+
+    result = memory.format_memory([], [], previous)
+
+    assert result == "Az előző beszélgetés (2026-09-16):\nX."
+
+
+def test_load_turn_context_includes_previous_summary_not_current(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+
+    async def scenario():
+        conn = db.connect()
+        try:
+            prev_id = memory._create_session(conn, T0)
+            conn.commit()
+            conn.execute(
+                "UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?",
+                ((T0 + timedelta(hours=1)).isoformat(), "Korabbi tema.", prev_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        session_id = await memory.start_turn("Mostani uzenet")
+
+        conn = db.connect()
+        try:
+            # az aktualis sessionnek is legyen sajat osszefoglaloja, hogy
+            # bizonyitsuk: onmagara nem szivarog be
+            conn.execute(
+                "UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?",
+                ((T0 + timedelta(hours=2)).isoformat(), "Sajat osszefoglalo.", session_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return await memory.load_turn_context(session_id, "Mostani uzenet")
+
+    context = asyncio.run(scenario())
+
+    assert "Korabbi tema." in context["memory"]
+    assert "Sajat osszefoglalo." not in context["memory"]

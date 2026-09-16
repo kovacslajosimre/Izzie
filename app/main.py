@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from dotenv import load_dotenv
@@ -12,7 +13,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from app import db, memory
+from app import db, extractor, memory
 from app.persona import build_system_prompt, load_persona
 from app.text import split_sentences
 
@@ -20,16 +21,51 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Izzie Brain")
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MODEL_NAME = "gemini-3.6-flash"
+BACKGROUND_INTERVAL_SECONDS = 300
 
-# Induláskor egyszer betoltjuk/lefuttatjuk, hogy hianyzo/hibas persona-fajl
-# vagy DB-migracio eseten az uvicorn azonnal, hangosan elszalljon, ne csak
-# egy /chat hivasnal.
+# Induláskor egyszer betoltjuk/lefuttatjuk, hogy hianyzo/hibas persona- vagy
+# extractor-prompt-fajl, vagy DB-migracio eseten az uvicorn azonnal, hangosan
+# elszalljon, ne csak egy /chat hivasnal.
 load_persona()
+extractor.load_extractor_prompt()
 db.connect().close()
+
+
+async def _background_cycle_loop() -> None:
+    """Ötpercenként lezárja a lejárt sessiont és feldolgozza a lezártakat.
+
+    Az első kör induláskor azonnal lefut, nem 5 perc múlva - fejlesztés
+    közben az uvicorn --reload minden mentésnél újraindít, egy késleltetett
+    első kör így akár órákig sem futna le. Egy kör hibája logolódik, de a
+    ciklust nem állítja le.
+    """
+    while True:
+        try:
+            await extractor.run_cycle(client)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("Hatterciklus hiba, folytatas a kovetkezo korben")
+        await asyncio.sleep(BACKGROUND_INTERVAL_SECONDS)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    task = asyncio.create_task(_background_cycle_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="Izzie Brain", lifespan=lifespan)
 
 
 class ChatRequest(BaseModel):
