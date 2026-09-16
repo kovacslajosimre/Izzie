@@ -29,6 +29,12 @@ Kategóriák (`kind`), csak ezek közül választhatsz:
 Ami hetek múlva is igaz és hasznos lesz: tartós tulajdonságok, szokások,
 kapcsolatok, folyamatban lévő projektek, döntések, fontos események.
 
+**Izzie maga is a felhasználó projektje.** Amit a felhasználó Izzie-ről
+elmond — a nevéről, az eredetéről, az ihletéről, a felépítéséről, a
+terveiről —, az `project` tény, és ugyanúgy megjegyzendő, mint bármi más,
+amit épít. Ilyenkor is a felhasználó nézőpontjából fogalmazz: „A felhasználó
+az Izzie nevet…", „A felhasználó Izzie-t … alapján hozta létre".
+
 ### Mit nem
 
 - Pillanatnyi állapotot („most fáradt", „épp kávézik"), hacsak nem
