@@ -116,3 +116,109 @@ elakad: a kapcsolat 1-2 ms alatt elutasításra kerül, miközben a
 alkalmazás-alapú kivétel (a Tailscale app felvétele) nem elég, mert a
 kérést nem a Tailscale küldi, hanem a `curl` vagy a kliens. A megoldás a
 ProtonVPN split tunnelingjében a `100.64.0.0/10` tartomány kizárása.
+
+## 1. szelet: chatablak
+
+Cél: egy egyszerű, de valódi chatablak. Beírt üzenet, Izzie válasza
+szavanként megjelenik, ahogy a szerver küldi. Semmi más.
+
+### Beállítások
+
+- `VITE_IZZIE_URL` (pl. `http://100.84.192.48:8000`) és `VITE_IZZIE_TOKEN`
+  egy `.env.local` fájlban a kliens repó gyökerében. A `*.local` minta már a
+  `.gitignore`-ban van, a git nem viszi fel.
+- Legyen egy `.env.example` a két változóval, érték nélkül.
+- Ha bármelyik hiányzik, a felület ezt jelzi egy érthető hibaüzenettel,
+  kérés helyett.
+- **Ismert korlát, szándékosan:** a `VITE_` változók build-kor beleégnek a
+  JavaScriptbe. Fejlesztéshez ez elfogadható, kiadott alkalmazáshoz nem. Az
+  első `tauri build` előtt a token a Windows jelszótárába költözik (külön
+  szelet).
+
+### Hálózat: a webview `fetch`-je
+
+A kérés a webview beépített `fetch`-jével megy, nem a Tauri HTTP
+pluginjével és nem Rust-parancson át. A szerver CORS-a ezt már kezeli, és így
+a streamelés a böngésző saját eszközeivel megoldható. Rust-kódhoz ebben a
+szeletben nem nyúlunk, csak a sablon `greet` parancsát és a hozzá tartozó
+kódot takarítjuk ki.
+
+### Streamelés
+
+Az `EventSource` csak GET-et tud, a `/chat` POST. Ezért a kliens a
+`response.body` folyamot maga olvassa és bontja.
+
+- **A bontás tiszta függvény, külön modulban** (pl. `src/sse.ts`), ami a
+  beérkező darabokból eseményeket ad. Nem függ a Reacttől és a hálózattól.
+- A darabhatár bárhol lehet: egy sor közepén, két esemény között, és egy
+  többájtos UTF-8 karakter (ékezet) közepén is. Ezért `TextDecoder`
+  `{ stream: true }` módban, és a feldolgozatlan maradék pufferben marad a
+  következő darabig.
+- Az események üres sorral (`\n\n`) záródnak; a `data:` sorokból jön a JSON.
+  A `\r\n` sorvéget is el kell fogadni.
+- Az ismeretlen `type`-ú eseményt figyelmen kívül hagyjuk (a szerver később
+  bővülhet). Az értelmezhetetlen JSON hiba.
+
+Eseménytípusok és kezelésük:
+
+| `type` | Mit tesz a kliens |
+|---|---|
+| `token` | a `text`-et hozzáfűzi a készülő válaszhoz |
+| `sentence` | egyelőre semmit (a hangszintézisé lesz) |
+| `done` | a válasz kész |
+| `error` | a `message`-et megjeleníti a válasz alatt; a már megérkezett szöveg marad |
+
+### Hibák
+
+- **A stream előtti hibák:** a `response.ok`-ot a folyam olvasása előtt kell
+  ellenőrizni. `401`: „Érvénytelen token” jellegű üzenet. Más státusz: a
+  státuszkód megjelenik. Hálózati hiba (a szerver nem érhető el): érthető
+  üzenet, a Tailscale/VPN irányába mutatva.
+- **Megszakadt folyam:** ha a folyam `done` nélkül ér véget, a válasz
+  „megszakadt”-ként jelenik meg, a szöveg marad.
+- Hibás válasz után az üzenetküldés újra használható.
+
+### Leállítás
+
+„Leállítás” gomb generálás közben, `AbortController`-rel. A szerver ezt
+már kezeli (a félbemaradt választ `partial`-ként naplózza). A kliensen a
+megállított válasz szövege marad, jelölve, hogy leállítva.
+
+### Felület
+
+- Üzenetlista (a felhasználóé és Izzie-é megkülönböztetve), alatta beviteli
+  mező és küldés gomb. `Enter` küld, `Shift+Enter` új sor.
+- Generálás közben a küldés tiltva, a Leállítás látszik.
+- Új üzenetnél a lista az aljára görget.
+- A felület szövegei magyarul.
+- Megjelenés: egyszerű, sötét téma, a sablon logói és stílusai eltűnnek.
+  Kidolgozott design nem cél ebben a szeletben.
+- Az ablak címe már `Izzie`.
+
+### Állapot
+
+A beszélgetés állapota a szerveren él. A kliens nem küld előzményt és nem
+tárol semmit: újraindítás után az ablak üres, de Izzie emlékszik. Az
+előzmény betöltése a szerverről későbbi szelet (új végpontot igényel).
+
+### Tesztek
+
+- Vitest, a bontó modulra: egy esemény egyben; több esemény egy darabban;
+  esemény több darabra vágva (a sor közepén is); ékezetes karakter két
+  darab között kettévágva; `\r\n` sorvég; ismeretlen típus; hibás JSON; a
+  folyam vége maradék puffer mellett.
+- A React-komponensre és a valódi hálózatra nincs automata teszt; azt a
+  füstpróba fedi.
+- `npm test` futtatja.
+
+### Füstpróba
+
+`npm run tauri dev`, majd:
+
+1. Egy üzenet: a válasz szavanként jelenik meg.
+2. Visszautalós kérdés: Izzie emlékszik (a szerveroldali memória működik a
+   kliensen át is).
+3. Egy hosszú válasz közben Leállítás: a szöveg megáll, jelölve.
+4. Hibás token a `.env.local`-ban (Vite újraindítás után): érthető 401-es
+   üzenet.
+5. Leállított uvicorn mellett: érthető hálózati hibaüzenet.
