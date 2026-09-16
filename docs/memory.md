@@ -83,7 +83,10 @@ Három különböző dolog, három különböző okból. Nem szabad összemosni 
 
 2. **Az aktuális beszélgetés utolsó N üzenete** — a folytonosság miatt.
 
-3. **Releváns emlékek** — kiválogatva. Kezdetben egyszerűen: kulcsszó-egyezés
+3. **Az előző beszélgetés összefoglalója** — hogy a session határán se
+   szakadjon meg a fonal (3. szelet).
+
+4. **Releváns emlékek** — kiválogatva. Kezdetben egyszerűen: kulcsszó-egyezés
    plusz frissesség szerinti rangsor, `LIMIT 5`. Vektoros keresés később
    ráépíthető.
 
@@ -118,8 +121,9 @@ Chat ablaknál van „bezárás", egy mindig futó asszisztensnél nincs. Megold
 
 - **Inaktivitási időtúllépés:** ha az utolsó üzenet óta eltelt 30 perc,
   a session lezárul (`closed_by = 'timeout'`), és indul az extractor.
-- **Éjszakai job:** a lezáratlanul maradt sessionöket feldolgozza
-  (`closed_by = 'nightly'`).
+- **Háttérciklus:** az alkalmazáson belül, ötpercenként lezárja a
+  lejárt sessionöket, és feldolgozza a lezártakat. Ez váltotta ki az
+  eredetileg tervezett éjszakai jobot, lásd a 3. szelet döntéseit.
 
 Ha ez nincs, vagy soha nem keletkezik emlék, vagy minden üzenet után lefut az
 extractor és ég a kvóta.
@@ -321,7 +325,8 @@ event menjen ki. A `main.py`-ban csak bekötés marad: kontextus lekérése,
 
 **Kézi tények.** Amíg nincs extractor, a tényeket SQL-lel visszük be,
 `extractor_version = 'manual'` értékkel. Így a 3. szelet meg tudja különböztetni
-őket a kivonatoltaktól, és nem nyúl hozzájuk:
+őket a kivonatoltaktól. (Védelmet ez nem jelent: a 3. szeletben az extractor
+a kézi tényt is leválthatja, ha elavult.) Példa:
 
 ```sql
 INSERT INTO facts (kind, content, created_at, extractor_version, pinned)
@@ -345,10 +350,175 @@ paraméterként, a DB ideiglenes):
   pinned kimarad, 0 pont kimarad, `k` betartva
 - `format_memory()`: üres bemenetre üres sztring, egyik rész üres
 
+### 3. szelet
+
+A 2. szelet élesítése után dőltek el.
+
+**Háttérciklus az éjszakai job helyett.** Az alkalmazás indulásakor (FastAPI
+lifespan) elindul egy asyncio taszk, ami `BACKGROUND_INTERVAL_SECONDS = 300`
+másodpercenként két dolgot csinál, ebben a sorrendben:
+
+1. lezárja a lejárt sessiont (`closed_by = 'timeout'`), **új session
+   nyitása nélkül** — erre külön függvény kell, a `resolve_session()` nem
+   használható, mert az újat is nyit;
+2. feldolgozza a lezárt, még fel nem dolgozott sessionöket, egyesével.
+
+Miért nem éjszakai job: a lusta lezárás miatt egy este 8-kor abbamaradt
+beszélgetés csak a következő üzenetnél zárulna le, és a kivonatolás addig
+várna. A `/chat`-be tenni pedig a válasz késleltetését rontaná. A ciklus egy
+kódút, bármikor újrafuttatható, és nem kell hozzá cron vagy systemd timer,
+ami a Dockerbe költözésnél külön gond lenne. Hátránya, hogy csak futó
+uvicorn mellett dolgozik — ez itt adott.
+
+A `closed_by = 'nightly'` érték így nem használt, de az enumban marad.
+A taszk leállításkor (lifespan vége) rendben megszakad. Egy kör hibája
+logolódik, de a ciklust nem állítja le.
+
+**Türelmi idő.** Csak az a session kerül feldolgozásra, amelynek `ended_at`
+értéke legalább `EXTRACT_GRACE_SECONDS = 120` másodperce van. Ritka
+versenyhelyzet ellen: a ciklus lezárhat egy sessiont éppen akkor, amikor egy
+`/chat` már hozzárendelte az üzenetét. A türelmi idő alatt a késve beírt
+üzenet még bekerül a feldolgozásba.
+
+**Migráció (séma v2).**
+
+```sql
+ALTER TABLE sessions ADD COLUMN extracted_at     TEXT;
+ALTER TABLE sessions ADD COLUMN extract_attempts INTEGER NOT NULL DEFAULT 0;
+```
+
+Feldolgozatlan: `ended_at IS NOT NULL AND extracted_at IS NULL AND
+extract_attempts < 3`.
+
+**Egy LLM-hívás, két kimenet.** Sessionönként egyetlen hívás adja a tényeket
+és a session-összefoglalót is. Az összefoglaló így nem kerül pluszba, és ez
+oldja fel a 2. szelet ismert korlátját: a tények azt őrzik meg, ami *igaz* a
+felhasználóról, az összefoglaló azt, *miről volt szó*.
+
+**Bemenet.** A session `complete` és nem redaktált üzenetei, id-vel és
+szerepkörrel, plusz az összes aktív tény id-vel és `kind`-dal. Ha a
+sessionben nincs egyetlen user üzenet sem, LLM-hívás nélkül feldolgozottnak
+jelöljük (`extracted_at` kitöltve, összefoglaló nélkül).
+
+Az aktív tények egyetlen listában mennek, nem `kind` szerint szétválogatva: a
+modell így akkor is megtalálja a leváltandót, ha más kategóriába sorolná.
+Néhány száz ténynél ez belefér; ha nem fér, akkor jön a szűrés.
+
+**Kimenet: strukturált JSON** (`response_mime_type = "application/json"` és
+`response_schema`), nem szabad szöveg:
+
+```json
+{
+  "summary": "2-4 mondat, magyarul, harmadik személyben",
+  "facts": [
+    {
+      "action": "new | supersede",
+      "kind": "identity | preference | project | relationship | event",
+      "content": "egy mondat",
+      "supersedes_id": 12,
+      "source_message_id": 345
+    }
+  ]
+}
+```
+
+A „nincs változás" nem tétel: amit a modell nem ír ki, az nem változik.
+
+**Validálás.** Tételenként, a DB-írás előtt. Eldobjuk és logoljuk (nem hibát
+dobunk), ha:
+
+- a `kind` nincs a zárt listában;
+- az `action` ismeretlen;
+- `supersede`-nél a `supersedes_id` nem aktív tény, vagy ugyanebben a
+  válaszban egy korábbi tétel már leváltotta;
+- a `source_message_id` nem ehhez a sessionhöz tartozik (az `action`-től
+  függetlenül);
+- a `content` üres.
+
+Ha maga a JSON értelmezhetetlen, az a kísérlet sikertelen.
+
+**Leváltás.** Az új tény beszúródik, a régi `superseded_by` és
+`superseded_at` értéket kap. Ez nem sérti a „nincs UPDATE" elvet: a régi
+tény tartalma nem változik, csak a leváltás tényét rögzítjük.
+
+- Az extractor **bármilyen** aktív tényt leválthat, a kézit és a pinned-et
+  is. Egy elavult kézi tény különben ellentmondana az újnak.
+- Az új tény **örökli** a leváltott `pinned` értékét.
+- Új (`new`) tény **mindig** `pinned = 0`. Hogy mi kerül a mag-profilba, az a
+  felhasználó döntése, nem az extractoré.
+
+**Egy tranzakció.** Egy session összes új ténye, leváltása, az
+összefoglaló (`summary`, `summary_model`, `summarized_at`) és az
+`extracted_at` egyetlen tranzakcióban íródik. Félbeszakadt írás után az
+újrafuttatás különben duplikálná a tényeket.
+
+**Hibakezelés.** Sikertelen kísérlet (API-hiba, értelmezhetetlen JSON):
+`extract_attempts` nő, és a következő körben újra próbálkozunk. Háromszor
+bukott session után warning a logba, és kimarad — egy tartósan hibás session
+ne égesse a kvótát. Újrafuttatni kézzel lehet, az `extract_attempts`
+nullázásával.
+
+**Az extractor-prompt fájlban él:** `prompts/extractor.md`, az
+`IZZIE_EXTRACTOR_PROMPT` env var-ral felülírható, az `IZZIE_PERSONA`
+mintájára. Induláskor betöltődik, hogy hiányzó fájlnál az uvicorn azonnal
+elszálljon. A prompt a szabályokat tartalmazza; a bemenetet (üzenetek,
+tények) a kód fűzi hozzá.
+
+**Verziók és modell.** `EXTRACTOR_VERSION = "v1"`, a prompt minden érdemi
+változásánál léptetni kell. `EXTRACTOR_MODEL` külön konstans, egyelőre
+ugyanaz, mint a chat modellje — így később olcsóbb vagy helyi modellre
+tehető a chat érintése nélkül. A `summary_model` ezt kapja. A `confidence`
+`NULL` marad: az LLM saját magabiztosság-becslése nem megbízható, és semmi
+nem használná.
+
+**Tények formája.** Egy mondat, magyarul, harmadik személyben a
+felhasználóról („A felhasználó…"). Az Izzie-hez szóló megfogalmazás („az
+ötleted…") nem megengedett — a kézi tényekre is ez a szabály.
+
+**Az összefoglaló a promptban.** A `load_turn_context()` a mag-profil és a
+találatok mellé betölti a legutóbbi lezárt, összefoglalóval rendelkező
+session összefoglalóját, ha az nem az aktuális session. A `format_memory()`
+harmadik részként írja ki, a session befejezésének dátumával
+(„Az előző beszélgetés (2026-09-16):"). Mindig csak egy: a régebbiek
+tartalmát a tények hordozzák.
+
+**Szerkezet.** Új modul: `app/extractor.py` (bemenet összerakása,
+validálás, DB-írás, egy session feldolgozása, a ciklus egy köre). A Gemini
+kliens paraméterként érkezik, nem az extractor hozza létre. A lifespan és a
+taszk indítása a `main.py`-ban van, a logika nem.
+
+**Tesztek.** LLM-hívásra nincs teszt; a hívás helyére kanonizált JSON-választ
+adó hamis kliens kerül.
+
+- lejárt session lezárása új nyitása nélkül; a friss session nyitva marad
+- feldolgozatlan sessionök kiválasztása: türelmi idő, `extract_attempts`
+  plafon, már feldolgozott kimarad
+- bemenet: `partial` és redaktált kimarad, aktív tények id-vel
+- validálás: minden eldobási eset külön
+- leváltás: `superseded_by` beáll, a `pinned` öröklődik, `new` sosem pinned
+- tranzakció: ha az írás közben hiba van, semmi nem marad a DB-ben
+- hibás JSON és API-hiba: `extract_attempts` nő, `extracted_at` üres marad
+- user üzenet nélküli session: nincs LLM-hívás, feldolgozottnak jelölve
+- `load_turn_context()`: az előző összefoglaló bekerül, az aktuális
+  sessioné nem
+- migráció: v1-es DB v2-re áll, adatvesztés nélkül
+
+**Füstpróba.** Beszélgetés valami új dologról, utána a session kézi
+lezárása:
+
+```sql
+UPDATE sessions SET ended_at = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'),
+                    closed_by = 'manual'
+WHERE ended_at IS NULL;
+```
+
+Legfeljebb hét perc múlva (türelmi idő + ciklus) a `facts` táblában
+megjelennek az új tények, a `sessions`-ben az összefoglaló. Utána egy új
+beszélgetésben: „Miről beszélgettünk legutóbb?"
+
 ## Nyitott kérdések
 
-- A session-összefoglaló (`sessions.summary`) kell-e egyáltalán, vagy a
-  kivonatolt tények elégségesek. A 3. szeletnél dől el.
 - Kell-e a `retrieve()` query-jébe az előző egy-két user üzenet is (pl. „és az
   mennyi volt?" típusú visszautalásnál). A 2. szelet után, használat alapján.
-- A `confidence` mezőt tölti-e az extractor, vagy egyelőre `NULL` marad.
+- Hogyan lehet kényelmesen kezelni a tényeket (listázás, pinned ki/be, kézi
+  javítás) SQL nélkül. Legkésőbb a kliensnél előjön.
