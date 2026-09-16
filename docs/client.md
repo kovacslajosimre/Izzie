@@ -252,6 +252,10 @@ hibát javítjuk, hanem felkészülünk rá.
 
 Két rész, két repóban: előbb a szerver, utána a kliens.
 
+**Állapot:** a szerver rész kész és élesben tesztelt (2026-09-16, a
+rövidített korláttal a kliensben ékezetes hibaüzenet jelent meg). A kliens
+rész következik.
+
 ### Szerver: időkorlát a Gemini-hívásokon
 
 **Chat.** Két korlát, konstansként az `app/main.py`-ban:
