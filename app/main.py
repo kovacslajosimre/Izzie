@@ -6,14 +6,15 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import APIRouter, Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from app import db, extractor, memory
+from app import auth, db, extractor, memory
 from app.persona import build_system_prompt, load_persona
 from app.text import split_sentences
 
@@ -27,10 +28,11 @@ MODEL_NAME = "gemini-3.6-flash"
 BACKGROUND_INTERVAL_SECONDS = 300
 
 # Induláskor egyszer betoltjuk/lefuttatjuk, hogy hianyzo/hibas persona- vagy
-# extractor-prompt-fajl, vagy DB-migracio eseten az uvicorn azonnal, hangosan
-# elszalljon, ne csak egy /chat hivasnal.
+# extractor-prompt-fajl, hianyzo/ures API-token, vagy DB-migracio eseten az
+# uvicorn azonnal, hangosan elszalljon, ne csak egy /chat hivasnal.
 load_persona()
 extractor.load_extractor_prompt()
+auth.load_api_token()
 db.connect().close()
 
 
@@ -66,6 +68,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Izzie Brain", lifespan=lifespan)
+
+_DEFAULT_CORS_ORIGINS = ["http://localhost:1420", "http://tauri.localhost"]
+
+
+def _load_cors_origins() -> list[str]:
+    value = os.getenv("IZZIE_CORS_ORIGINS")
+    if not value:
+        return _DEFAULT_CORS_ORIGINS
+    return [origin.strip() for origin in value.split(",") if origin.strip()]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_load_cors_origins(),
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
+)
+
+# Minden vegpont ezen a routeren at vedett - egy uj vegpont igy nem maradhat
+# veletlenul token nelkul. Kivetel a /health, az kozvetlenul az app-on el.
+protected_router = APIRouter(dependencies=[Depends(auth.require_token)])
 
 
 class ChatRequest(BaseModel):
@@ -139,7 +163,10 @@ async def generate(message: str, session_id: int) -> AsyncIterator[str]:
         stream = await client.aio.models.generate_content_stream(
             model=MODEL_NAME,
             contents=contents,
-            config=types.GenerateContentConfig(system_instruction=system_prompt),
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            ),
         )
 
         async for chunk in stream:
@@ -186,7 +213,7 @@ async def generate(message: str, session_id: int) -> AsyncIterator[str]:
         yield sse({"type": "error", "message": "Hiba tortent a valasz generalasa kozben."})
 
 
-@app.post("/chat")
+@protected_router.post("/chat")
 async def chat(req: ChatRequest):
     session_id = await memory.start_turn(req.message)
     return StreamingResponse(
@@ -198,6 +225,9 @@ async def chat(req: ChatRequest):
             "X-Accel-Buffering": "no",  # nginx ne pufferelje, ha egyszer moge kerul
         },
     )
+
+
+app.include_router(protected_router)
 
 
 @app.get("/health")

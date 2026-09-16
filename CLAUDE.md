@@ -26,6 +26,9 @@ Kész:
 - Memória — napló, előzmény, mag-profil, kulcsszavas visszakeresés és
   háttér-extractor (`app/extractor.py`, lifespan-háttérciklus); pontos
   szelet-állapot: [docs/memory.md](docs/memory.md)
+- Szerver-előkészítés a kliensnek — bearer token minden végponton a `/health`
+  kivételével (`app/auth.py`, `APIRouter(dependencies=[...])`), CORS a Tauri
+  ablaknak; lásd [docs/client.md](docs/client.md)
 
 Nincs kész: óra/időkontextus, naptár, fájlkeresés, kliens, hang, Docker.
 

@@ -138,6 +138,7 @@ async def _call_llm(client: genai.Client, session_input: SessionInput) -> Extrac
             system_instruction=prompt,
             response_mime_type="application/json",
             response_schema=ExtractionResult,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         ),
     )
     if response.parsed is None:

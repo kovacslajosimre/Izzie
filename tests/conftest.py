@@ -8,6 +8,7 @@ import pytest
 # beallitott env varokat. Igy a tesztek valodi .env / kulcs nelkul, friss
 # klonon is lefutnak - a mockolt Gemini-hivasokhoz a kulcs erteke lenyegtelen.
 os.environ.setdefault("GEMINI_API_KEY", "test-key-not-a-real-secret")
+os.environ.setdefault("IZZIE_API_TOKEN", "test-token-not-a-real-secret")
 
 from app import db
 
