@@ -183,6 +183,8 @@ Az extractor-prompt, a `kind` besorolás, a supersede-logika, az éjszakai job.
 
 ## Megvalósítási döntések
 
+### 1. szelet
+
 Ezek az 1. szelet megkezdése előtt dőltek el, a kód átnézése nyomán.
 
 **DB-hozzáférés.** Stdlib `sqlite3`, a blokkoló hívások `asyncio.to_thread`-del
@@ -222,9 +224,125 @@ a nyers napló pedig az igazság forrása. De nem úgy, mintha befejeződött
 volna: a `messages.status` mező `'complete'` vagy `'partial'`. A `partial`
 üzenetek nem kerülnek az extractor bemenetébe.
 
+### 2. szelet
+
+Az 1. szelet lezárása után, a kód átnézése nyomán dőltek el.
+
+**Előzmény: valódi többfordulós beszélgetés.** Az aktuális session üzenetei
+a Gemini `contents` paraméterébe kerülnek, szerepkörökkel, nem szövegként a
+system promptba. A modell a többfordulós formátumra van tanítva; a szövegként
+beillesztett előzményt idézetként kezeli, nem beszélgetésként. Ezzel a
+`generate()` már nem egyetlen `message` sztringet kap, hanem üzenetlistát.
+
+**Az aktuális üzenet is a naplóból jön.** A `start_turn()` a generálás előtt
+már beírja a user üzenetet, így az előzmény utolsó eleme maga az aktuális
+üzenet. Nincs külön „előzmény + új üzenet" összefűzés: egy forrás, nem kettő.
+
+**Vágás darabszám szerint.** `HISTORY_MESSAGE_LIMIT = 20` üzenet (nem forduló),
+az `app/memory.py`-ban. Tokenalapú vágás később ráépíthető, ha egy hosszú
+válasz túl sokat visz el.
+
+**Mi kerül az előzménybe.** Csak az aktuális session, `created_at, id` szerint
+rendezve, a redaktált sorok (`redacted_at IS NOT NULL`) nélkül. A `partial`
+üzenetek bekerülnek: a felhasználó látta őket, a folytonossághoz hozzátartoznak.
+Az extractor bemenetéből továbbra is kimaradnak — ez két különböző kérdés.
+
+**Szerepkör-normalizálás.** A Gemini váltakozó szerepköröket vár, user-rel
+kezdve. A napló ezt nem garantálja: üres válasz nem kerül naplóba, így két user
+üzenet követheti egymást, a vágás pedig eshet egy assistant üzenet elé. Ezért a
+konverzió:
+
+- `assistant` → `model`
+- az egymást követő azonos szerepkörű üzenetek egy fordulóba vonódnak össze,
+  üres sorral elválasztva
+- a lista eleji `model` fordulók eldobódnak
+
+Ez tiszta függvény (pl. `to_gemini_contents()`). Gemini-specifikus, ezért a
+`main.py`-ban él, amíg nincs külön LLM-réteg. A `memory.py` szolgáltatófüggetlen
+marad: `{"role": ..., "content": ...}` listát ad vissza, `google.genai`-t nem
+importál.
+
+**`core_profile()`.** Aktív (`superseded_by IS NULL AND deleted_at IS NULL`),
+`pinned = 1` tények, `kind`, azon belül `created_at` szerint. Nincs kemény
+plafon, de 20 fölött warning a logba: a mag-profilnak kicsinek kell maradnia,
+és jobb látni, mielőtt csendben elhízik.
+
+**`retrieve(query, k=5)`: kulcsszó-egyezés Pythonban.** Betölti az aktív, nem
+pinned tényeket, és Pythonban pontozza őket. Nem SQL `LIKE` és nem FTS5, mert:
+
+- a magyar ragoz („szerver", „szerveren", „szerverről"), egész szavas egyezés
+  nem működik;
+- az FTS5 virtuális táblát, triggereket és migrációt hozna egy olyan rétegre,
+  amit a vektoros keresés úgyis lecserél;
+- néhány száz ténynél a Python-oldali pontozás ingyen van, és tiszta
+  függvényként tesztelhető.
+
+A pontozás:
+
+- **Tokenizálás:** kisbetűsítés, szétvágás minden nem-betű karakternél, a
+  kötőjelnél is („Izzie-ről" → `izzie`, `ről`). Az ékezetek maradnak.
+- **Eldobva:** a 3 karakternél rövidebb szavak és egy rövid magyar
+  stopword-lista (`hogy`, `nem`, `van`, `egy`, `és`, `meg`, `mit`, `ami`,
+  `azt`, `csak`, `már`, `még`, `volt`, `lesz`, `kell`, `nekem`, `neked` —
+  bővíthető).
+- **Egyezés:** két szó egyezik, ha a rövidebb a hosszabb prefixe, vagy a közös
+  prefixük legalább 4 karakter. Szándékosan durva szótövezés: „gép" ~ „gépem",
+  „kutyám" ~ „kutyáról". Lesz téves találat („szerver" ~ „szerda"), ezt
+  elfogadjuk; a `k` limit tompítja.
+- **Pontszám:** hány *különböző* query-szónak van egyezése a tényben. A 0
+  pontos tény nem kerül vissza.
+- **Rangsor:** pontszám szerint csökkenő, azonos pontnál `created_at` szerint
+  csökkenő.
+
+A query az aktuális user üzenet. A pinned tények kimaradnak, mert a mag-profil
+már tartalmazza őket.
+
+**A promptba kerülő blokk.** `format_memory(core, relevant) -> str` a
+`memory.py`-ban, ennek a kimenete megy a `context["memory"]`-ba. Két rész,
+soronként egy tény (`- ...`), „A felhasználóról:" és „Ami most releváns lehet:"
+fejléccel. Az üres rész kimarad; ha mindkettő üres, a kimenet üres sztring, és
+a `build_system_prompt` ilyenkor nem ír memória-blokkot. A fejlécek ugyanabba a
+kategóriába esnek, mint a `_LENGTH_HINT`: prompt-szerkezet, nem persona-tartalom.
+Ha Izzie kéretlenül sorolgatja az emlékeit, az viselkedési kérdés, és a javítás
+a `persona/izzie.yaml`-ba megy, nem a kódba.
+
+**Bekötés.** Egy async belépési pont a `memory.py`-ban (pl.
+`load_turn_context(session_id, user_message)`), ami egyetlen `to_thread`-ben,
+egyetlen kapcsolattal olvassa ki az előzményt, a mag-profilt és a találatokat.
+A `generate()` ezt a `try` blokkon belül hívja, hogy DB-hiba esetén is `error`
+event menjen ki. A `main.py`-ban csak bekötés marad: kontextus lekérése,
+`build_system_prompt(persona, {"memory": ...})`, konverzió, stream.
+
+**Kézi tények.** Amíg nincs extractor, a tényeket SQL-lel visszük be,
+`extractor_version = 'manual'` értékkel. Így a 3. szelet meg tudja különböztetni
+őket a kivonatoltaktól, és nem nyúl hozzájuk:
+
+```sql
+INSERT INTO facts (kind, content, created_at, extractor_version, pinned)
+VALUES ('identity', 'A felhasználó neve Lajos.',
+        strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'), 'manual', 1);
+```
+
+**Ismert korlát, szándékosan.** Az előzmény a session határán megszakad:
+30 perc csend után Izzie a korábbi beszélgetésből semmire nem emlékszik, csak a
+tényekre. A 2. szeletben ez így helyes — az átívelést a 3. szelet adja. Az
+előző session végét nem hozzuk át előre.
+
+**Tesztek** (az 1. szelet mintájára: a lekérdező függvények kapcsolatot kapnak
+paraméterként, a DB ideiglenes):
+
+- előzmény: csak az aktuális session, sorrend, redaktált kimarad, `partial`
+  bent marad, a limit a legutolsó N-et tartja meg
+- `to_gemini_contents()`: szerepkör-leképezés, összevonás, eleji `model` eldobása
+- `core_profile()`: superseded, törölt és nem pinned tény kimarad
+- `retrieve()`: ragozott egyezés, stopword és rövid szó nem ad pontot, rangsor,
+  pinned kimarad, 0 pont kimarad, `k` betartva
+- `format_memory()`: üres bemenetre üres sztring, egyik rész üres
+
 ## Nyitott kérdések
 
 - A session-összefoglaló (`sessions.summary`) kell-e egyáltalán, vagy a
   kivonatolt tények elégségesek. A 3. szeletnél dől el.
-- Hány üzenet az „utolsó N" a promptban, és tokenben vagy darabban mérjük.
+- Kell-e a `retrieve()` query-jébe az előző egy-két user üzenet is (pl. „és az
+  mennyi volt?" típusú visszautalásnál). A 2. szelet után, használat alapján.
 - A `confidence` mezőt tölti-e az extractor, vagy egyelőre `NULL` marad.
