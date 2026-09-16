@@ -222,3 +222,19 @@ előzmény betöltése a szerverről későbbi szelet (új végpontot igényel).
 4. Hibás token a `.env.local`-ban (Vite újraindítás után): érthető 401-es
    üzenet.
 5. Leállított uvicorn mellett: érthető hálózati hibaüzenet.
+
+**Eredmény (2026-09-16):** mind az öt lépés a várt módon működött.
+
+### Megfigyelések a füstpróbából
+
+- **Az üres buborék lefagyásnak látszik.** Az első token megérkezéséig a
+  válaszbuborék üres, és semmi nem jelzi, hogy a kérés fut. Kell egy
+  „Izzie gondolkodik…” jelzés az első tokenig. A következő szeletbe.
+- **Késleltetés az uvicorn újraindítása után.** Egy újraindítás utáni első
+  üzenetre a válasz nem indult el, és kézzel le lett állítva. Az ok nem
+  tisztázott (induláskori háttérciklus, lassú első Gemini-válasz, vagy
+  valódi hiba); a várakozási idő és az uvicorn-napló alapján kell
+  eldönteni.
+- A leállított, üres válasz nem került a naplóba, a két egymást követő
+  user üzenetet a szerver egy fordulóba vonta — a 2. szelet normalizálása
+  a várt módon működött.
