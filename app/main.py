@@ -56,6 +56,30 @@ async def _log_partial_safely(session_id: int, full_text: str) -> None:
         pass
 
 
+def to_gemini_contents(history: list[dict]) -> list[types.Content]:
+    """Az elozmenyt a Gemini tobbfordulos `contents` formatumara alakitja.
+
+    A naplo 'assistant' szerepkoret 'model'-re forditja, az egymast koveto
+    azonos szerepkoru uzeneteket egy forduloba vonja ossze (a naplo ezt nem
+    garantalja: ures valasz nem kerul naplozasra, igy ket user uzenet is
+    kovetheti egymast), es a lista elejerol eldobja a 'model' fordulokat -
+    a Gemini valtakozo szerepkoroket var, user-rel kezdve.
+    """
+    merged: list[tuple[str, str]] = []
+    for entry in history:
+        role = "model" if entry["role"] == "assistant" else "user"
+        content = entry["content"]
+        if merged and merged[-1][0] == role:
+            merged[-1] = (role, merged[-1][1] + "\n\n" + content)
+        else:
+            merged.append((role, content))
+
+    while merged and merged[0][0] == "model":
+        merged.pop(0)
+
+    return [types.Content(role=role, parts=[types.Part(text=content)]) for role, content in merged]
+
+
 async def generate(message: str, session_id: int) -> AsyncIterator[str]:
     """A modell valaszat token- es mondatszintu eventekre bontja.
 
@@ -66,16 +90,19 @@ async def generate(message: str, session_id: int) -> AsyncIterator[str]:
       {"type": "error",    "message": "..."}
     """
     persona = load_persona()
-    system_prompt = build_system_prompt(persona)
 
     buffer = ""
     full_text = ""
     index = 0
 
     try:
+        context = await memory.load_turn_context(session_id, message)
+        system_prompt = build_system_prompt(persona, {"memory": context["memory"]})
+        contents = to_gemini_contents(context["history"])
+
         stream = await client.aio.models.generate_content_stream(
             model=MODEL_NAME,
-            contents=message,
+            contents=contents,
             config=types.GenerateContentConfig(system_instruction=system_prompt),
         )
 

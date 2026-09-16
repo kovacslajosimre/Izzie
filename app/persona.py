@@ -50,9 +50,12 @@ def load_persona(path: Optional[Path] = None) -> Persona:
 def build_system_prompt(persona: Persona, context: Optional[dict] = None) -> str:
     """Osszerakja a system promptot personabol + futasideju kontextusbol.
 
-    A `context` egyelore ures. Ide fog bekerulni kesobb a pontos ido,
-    a memoria-talalatok es a naptar. Azert van mar most itt, hogy
-    a hivasi felulet ne valtozzon, amikor bejon a Memory modul.
+    A `context["memory"]` mar toltve van: az app/memory.py format_memory()
+    fuggvenye allitja ossze a mag-profilbol es a visszakeresett tenyekbol,
+    sajat (magyar) fejlecekkel - ez itt csak egy generikus "Memory:" cimkevel
+    kapja korbe. A `time` es `calendar` kulcsok meg nincsenek toltve, de a
+    felulet mar most nyitva van szamukra, hogy a bekapcsolasuk ne jarjon
+    atirassal.
     """
     parts = [persona.self_description.strip()]
 

@@ -23,8 +23,10 @@ Kész:
 - `GET /health`
 - Persona-réteg — `persona/izzie.yaml` + `app/persona.py`
 - Mondathatár-felismerés a TTS-hez — `app/text.py`
+- Memória — napló, előzmény, mag-profil és kulcsszavas visszakeresés,
+  bekötve a `/chat`-be; pontos szelet-állapot: [docs/memory.md](docs/memory.md)
 
-Nincs kész: memória, óra/időkontextus, naptár, fájlkeresés, kliens, hang, Docker, tesztek.
+Nincs kész: óra/időkontextus, naptár, fájlkeresés, kliens, hang, Docker.
 
 A pontos állapotot a kód és a `git log` mondja meg, nem ez a szakasz. Ha eltérést
 találsz a kód és az itt leírtak között, azt jelezd, ne csendben igazodj hozzá.
