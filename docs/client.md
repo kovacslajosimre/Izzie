@@ -1,7 +1,8 @@
 # Kliens
 
 Állapot: a Tauri váz kész (`kovacslajosimre/Izzie-client`), a szerver
-előkészítése a következő lépés. A kliens szeletei ezután kerülnek ide.
+előkészítése (token, CORS, Tailscale) kész és élesben tesztelt. A kliens
+szeletei ezután kerülnek ide.
 
 ## Felállás
 
@@ -93,3 +94,25 @@ curl -N -X POST http://100.84.192.48:8000/chat \
 A laptopról ugyanez `curl.exe`-vel, és egy hibás tokennel is: `401`.
 A helyi hálózati címről (`192.168.1.57:8000`) a kapcsolatnak el kell
 bukni.
+
+Eredmény (2026-09-16): minden eset a várt módon működött, a szerveren és a
+laptopról is.
+
+### Indítás
+
+```bash
+uvicorn app.main:app --reload --host 100.84.192.48
+```
+
+tmuxban (`tmux new -s izzie`), hogy egy SSH-szakadás ne állítsa le. A
+`--reload` a `.env` változását nem veszi észre: token-csere után kézi
+újraindítás kell.
+
+### Ismert buktató: ProtonVPN a laptopon
+
+Bekapcsolt ProtonVPN mellett a Tailscale-címekre menő forgalom a laptopon
+elakad: a kapcsolat 1-2 ms alatt elutasításra kerül, miközben a
+`tailscale ping` működik (az a Tailscale saját csatornáján megy). Az
+alkalmazás-alapú kivétel (a Tailscale app felvétele) nem elég, mert a
+kérést nem a Tailscale küldi, hanem a `curl` vagy a kliens. A megoldás a
+ProtonVPN split tunnelingjében a `100.64.0.0/10` tartomány kizárása.
