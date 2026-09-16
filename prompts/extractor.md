@@ -54,5 +54,15 @@ Egy meglévő tényt legfeljebb egyszer válthatsz le.
 A `source_message_id` annak a felhasználói üzenetnek az azonosítója, amelyből
 a tény kiderült. Csak a megadott üzenetazonosítók közül választhatsz.
 
+### A kimenet mezői
+
+- `summary` — az összefoglaló
+- `facts` — a tények listája, tételenként:
+  - `action` — `new` vagy `supersede`
+  - `kind` — a fenti öt kategória egyike
+  - `content` — maga a tény, egy mondat
+  - `supersedes_id` — a leváltott tény azonosítója; `new` esetén üres
+  - `source_message_id` — a forrás felhasználói üzenet azonosítója
+
 Ha a beszélgetésben nincs semmi megjegyzésre érdemes, a `facts` lista
 legyen üres. Ez gyakori és rendben van: inkább kevesebb, de pontos tény.
