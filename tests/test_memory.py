@@ -249,6 +249,25 @@ def test_retrieve_ignores_stopwords_and_short_words(conn):
     assert results == []
 
 
+def test_tokenize_keeps_non_hungarian_accented_letters_whole():
+    # Regi Windows-kodlapok miatt elofordulo ekezetek (pl. õ, û) - egy szuk,
+    # csak magyar ekezeteket ismero minta szothatarnak nezne oket.
+    assert memory._tokenize("kõnyvtár") == ["kõnyvtár"]
+    assert memory._tokenize("Straße") == ["straße"]
+
+
+def test_tokenize_keeps_words_with_digits():
+    assert memory._tokenize("win11 gepen fut") == ["win11", "gepen", "fut"]
+
+
+def test_retrieve_matches_query_on_digits(conn):
+    _insert_fact(conn, content="A gepben egy RTX 3060 van.")
+
+    results = memory.retrieve(conn, "milyen a 3060?")
+
+    assert [f.content for f in results] == ["A gepben egy RTX 3060 van."]
+
+
 def test_retrieve_excludes_pinned_zero_score_and_respects_k(conn):
     _insert_fact(conn, content="A kutya neve Morzsa.", pinned=1)
     for i in range(7):

@@ -29,7 +29,10 @@ _STOPWORDS = {
     "hogy", "nem", "van", "egy", "és", "meg", "mit", "ami", "azt", "csak",
     "már", "még", "volt", "lesz", "kell", "nekem", "neked",
 }
-_WORD_RE = re.compile(r"[a-záéíóöőúüű]+")
+# Unicode betuk es szamjegyek - nem csak a magyar ekezetek, mert pl. a regi
+# Windows-kodlapok miatt eloforduló idegen ekezetek (pl. "Straße", "kõnyvtár")
+# is szohatar nelkul szakadnanak szet; a szamjegyek gepnevekhez/verziokhoz kellenek.
+_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _MIN_WORD_LENGTH = 3
 _MIN_COMMON_PREFIX = 4
 

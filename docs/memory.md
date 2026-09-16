@@ -280,8 +280,13 @@ pinned tényeket, és Pythonban pontozza őket. Nem SQL `LIKE` és nem FTS5, mer
 
 A pontozás:
 
-- **Tokenizálás:** kisbetűsítés, szétvágás minden nem-betű karakternél, a
-  kötőjelnél is („Izzie-ről" → `izzie`, `ről`). Az ékezetek maradnak.
+- **Tokenizálás:** kisbetűsítés, szétvágás minden nem-betű és nem-szám
+  karakternél, a kötőjelnél is („Izzie-ről" → `izzie`, `ről`). Az ékezetek
+  maradnak, és nem csak a magyarok — a szóhatár Unicode-betű, nem egy fix
+  magyar ékezet-lista, mert egy régi kódlapról érkező idegen ékezet
+  („Straße", „kõnyvtár") is szót szakítana szét egy szűkebb mintánál; a
+  számjegyek megtartása pedig gépnevekhez és verziószámokhoz kell
+  („win11", „3060").
 - **Eldobva:** a 3 karakternél rövidebb szavak és egy rövid magyar
   stopword-lista (`hogy`, `nem`, `van`, `egy`, `és`, `meg`, `mit`, `ami`,
   `azt`, `csak`, `már`, `még`, `volt`, `lesz`, `kell`, `nekem`, `neked` —
