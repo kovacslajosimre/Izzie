@@ -33,7 +33,7 @@ from app.paths import resolve_path
 logger = logging.getLogger(__name__)
 
 EXTRACTOR_PROMPT_PATH = resolve_path("IZZIE_EXTRACTOR_PROMPT", "prompts/extractor.md")
-EXTRACTOR_VERSION = "v1"
+EXTRACTOR_VERSION = "v2"
 EXTRACTOR_MODEL = "gemini-3.6-flash"  # kulon konstans, ld. docs/memory.md
 EXTRACT_GRACE_SECONDS = 120
 MAX_EXTRACT_ATTEMPTS = 3
