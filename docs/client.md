@@ -238,3 +238,85 @@ előzmény betöltése a szerverről későbbi szelet (új végpontot igényel).
 - A leállított, üres válasz nem került a naplóba, a két egymást követő
   user üzenetet a szerver egy fordulóba vonta — a 2. szelet normalizálása
   a várt módon működött.
+
+## 2. szelet: várakozás és időkorlátok
+
+### Miért
+
+A füstpróbán egy kérés fél percnél tovább üres buborékkal állt, és kézzel
+kellett leállítani. Az uvicorn-napló szerint a szerver elfogadta a kérést és
+megnyitotta a folyamot (`200 OK`), utána semmi: se hiba, se figyelmeztetés.
+A Gemini nem válaszolt, és **sem a szerver, sem a kliens nem ad fel soha.**
+Ez a külső szolgáltatás oldalán bármikor újra előfordulhat, ezért nem a
+hibát javítjuk, hanem felkészülünk rá.
+
+Két rész, két repóban: előbb a szerver, utána a kliens.
+
+### Szerver: időkorlát a Gemini-hívásokon
+
+**Chat.** Két korlát, konstansként az `app/main.py`-ban:
+
+- `FIRST_CHUNK_TIMEOUT_SECONDS = 30` — a hívás indításától az első
+  darabig. Ide tartozik a stream megnyitása is.
+- `CHUNK_IDLE_TIMEOUT_SECONDS = 30` — két darab között. Egy hosszú,
+  folyamatosan érkező válasz így nem ütközik a korlátba, egy menet közben
+  elakadt viszont igen.
+
+Megvalósítás `asyncio.wait_for`-ral (vagy `asyncio.timeout`-tal) a stream
+megnyitása és minden egyes következő darab kérése köré — nem az SDK saját
+HTTP-timeoutjával, mert annak viselkedése streamelésnél nem egyértelmű, az
+asyncio-s korlát viszont bármelyik fázisban elakadt hívást elkapja.
+
+Lejáratkor:
+
+- `error` esemény a kliensnek: „Izzie most nem kapott választ a
+  modelltől. Próbáld újra.”
+- A logba warning, a korlát típusával (első darab vagy menet közbeni).
+- A már megérkezett szöveg a meglévő módon `partial`-ként naplózódik; ha
+  nem jött semmi, a válasz nem kerül naplóba (mint eddig).
+- A Gemini-stream lezárul, nem marad nyitott kapcsolat a háttérben.
+
+**Extractor.** `EXTRACTOR_TIMEOUT_SECONDS = 120` a teljes hívásra. Lejárat
+= sikertelen kísérlet, a meglévő úton (`extract_attempts` nő). Egy elakadt
+kivonatolás így nem tartja fel a háttérciklust.
+
+**Tesztek.** Hamis kliens, ami nem ad választ (illetve egy darab után
+elakad): `error` esemény megy ki, az első esetben nincs assistant-sor, a
+másodikban `partial` sor van a megérkezett szöveggel. Extractor: az elakadó
+hívásból sikertelen kísérlet lesz. A tesztek rövid korláttal futnak
+(konstans felülírása), ne várjanak valóban 30 másodpercet.
+
+### Kliens: „gondolkodik” jelzés és biztonsági korlát
+
+**Jelzés.** Amíg az első `token` meg nem érkezik, a válaszbuborékban egy
+finoman animált „Izzie gondolkodik…” jelzés látszik. Az első tokennel
+eltűnik. Leállításkor és hibánál is eltűnik.
+
+**Biztonsági korlát.** Arra az esetre, ha a szerver maga akad el (és ezért
+a saját `error` eseményét sem küldi el):
+
+- `IDLE_TIMEOUT_MS = 45000` — ennyi ideig nem érkezik **semmilyen adat** a
+  folyamon (bármilyen darab nullázza, nem csak a `token` esemény).
+- Szándékosan hosszabb a szerver 30 másodpercénél: normál esetben a
+  szerver `error` eseménye ér ide előbb, és az a pontosabb üzenet.
+- Lejáratkor a kliens megszakítja a kérést, és új végkimenetellel zárja:
+  `ending: "timeout"`. Megjelenítés: „Izzie nem válaszolt időben.”, a már
+  megérkezett szöveg marad.
+- A kérés elküldésétől számít, így a fejlécre várakozást is lefedi.
+- A korlát a `chatClient`-ben él, nem a komponensben. A felhasználói
+  leállítás és az időkorlát miatti megszakítás megkülönböztethető kell
+  legyen (az egyik `aborted`, a másik `timeout`).
+
+**Tesztek.** A bontó modul nem változik. Az időkorlátra nincs automata
+teszt (a `chatClient` hálózati réteg); a füstpróba fedi.
+
+### Füstpróba
+
+1. Normál beszélgetés: a jelzés megjelenik, az első szóval eltűnik.
+2. A szerver korlátjának próbája: átmenetileg
+   `FIRST_CHUNK_TIMEOUT_SECONDS = 0.01`, egy üzenet → a szerver
+   hibaüzenete jelenik meg. Utána visszaállítás.
+3. A kliens korlátjának próbája: átmenetileg `IDLE_TIMEOUT_MS = 2000` és a
+   szerveren egy mesterséges késleltetés — vagy egyszerűbben: a szerver
+   folyamatát `kill -STOP`-pal megállítva, majd `kill -CONT`-tal
+   folytatva. → „Izzie nem válaszolt időben.” Utána visszaállítás.
