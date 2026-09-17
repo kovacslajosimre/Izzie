@@ -9,12 +9,11 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from app import auth, db, extractor, memory
+from app import auth, db, extractor, llm, memory
 from app.persona import build_system_prompt, load_persona
 from app.text import split_sentences
 
@@ -22,7 +21,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+client = llm.create_client(os.environ["GEMINI_API_KEY"])
 
 MODEL_NAME = "gemini-3.6-flash"
 BACKGROUND_INTERVAL_SECONDS = 300
@@ -257,14 +256,20 @@ async def generate(message: str, session_id: int) -> AsyncIterator[str]:
         logger.info("A /chat taszk megszakitva, reszleges valasz naplozasa")
         await _log_partial_safely(session_id, full_text)
         raise
-    except genai_errors.APIError:
-        logger.exception("Gemini API hiba a /chat streamben")
+    except genai_errors.APIError as exc:
+        if llm.is_transient_error(exc):
+            logger.warning("Gemini atmeneti hiba a /chat streamben: %s %s", exc.code, exc.status)
+        else:
+            logger.exception("Gemini API hiba a /chat streamben")
         await memory.log_assistant_message(session_id, full_text, "partial")
-        yield sse({"type": "error", "message": "Hiba történt a válasz generálása közben."})
-    except Exception:  # noqa: BLE001
-        logger.exception("Varatlan hiba a /chat streamben")
+        yield sse({"type": "error", "message": llm.describe_error(exc)})
+    except Exception as exc:  # noqa: BLE001
+        if llm.is_transient_error(exc):
+            logger.warning("Atmeneti hiba a /chat streamben: %s", exc)
+        else:
+            logger.exception("Varatlan hiba a /chat streamben")
         await memory.log_assistant_message(session_id, full_text, "partial")
-        yield sse({"type": "error", "message": "Hiba történt a válasz generálása közben."})
+        yield sse({"type": "error", "message": llm.describe_error(exc)})
 
 
 @protected_router.post("/chat")

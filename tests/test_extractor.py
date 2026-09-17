@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from google.genai import errors as genai_errors
 
 from app import db, extractor, memory
 
@@ -39,8 +40,10 @@ class _FakeModels:
     def __init__(self, parsed=None, raise_exc=None):
         self._parsed = parsed
         self._raise = raise_exc
+        self.calls = 0
 
     async def generate_content(self, **kwargs):
+        self.calls += 1
         if self._raise:
             raise self._raise
         return SimpleNamespace(parsed=self._parsed)
@@ -392,7 +395,9 @@ def test_process_session_api_error_increments_attempts(tmp_path, monkeypatch):
     assert row["extract_attempts"] == 1
 
 
-def test_process_session_timeout_increments_attempts(tmp_path, monkeypatch):
+def test_process_session_timeout_is_transient_and_does_not_increment_attempts(tmp_path, monkeypatch):
+    """Idokorlat atmeneti hiba (docs/llm.md): nem szamit kiserletnek, es a
+    process_session False-t ad vissza, hogy a run_cycle megszakitsa a kort."""
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
     monkeypatch.setattr(extractor, "EXTRACTOR_TIMEOUT_SECONDS", 0.05)
 
@@ -409,7 +414,7 @@ def test_process_session_timeout_increments_attempts(tmp_path, monkeypatch):
 
     fake_client = SimpleNamespace(aio=SimpleNamespace(models=_HangingModels()))
 
-    asyncio.run(extractor.process_session(fake_client, session_id, now=T0))
+    should_continue = asyncio.run(extractor.process_session(fake_client, session_id, now=T0))
 
     conn = db.connect()
     try:
@@ -419,8 +424,37 @@ def test_process_session_timeout_increments_attempts(tmp_path, monkeypatch):
     finally:
         conn.close()
 
+    assert should_continue is False
     assert row["extracted_at"] is None
-    assert row["extract_attempts"] == 1
+    assert row["extract_attempts"] == 0
+
+
+def test_process_session_server_error_is_transient_and_does_not_increment_attempts(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+
+    conn = db.connect()
+    session_id = memory._create_session(conn, T0)
+    conn.commit()
+    memory.log_message(conn, session_id, "user", "Szia", "complete", created_at=T0)
+    conn.close()
+
+    fake_client = _FakeClient(
+        raise_exc=genai_errors.ServerError(503, {"message": "overloaded", "status": "UNAVAILABLE"})
+    )
+
+    should_continue = asyncio.run(extractor.process_session(fake_client, session_id, now=T0))
+
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            "SELECT extracted_at, extract_attempts FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert should_continue is False
+    assert row["extracted_at"] is None
+    assert row["extract_attempts"] == 0
 
 
 def test_process_session_unparseable_json_increments_attempts(tmp_path, monkeypatch):
@@ -529,3 +563,46 @@ def test_run_cycle_closes_expired_and_processes_unprocessed(tmp_path, monkeypatc
     assert ready["extracted_at"] is not None
     assert ready["summary"] == "Kesz."
     assert session_count == 2
+
+
+def test_run_cycle_stops_after_transient_error_leaves_later_sessions_unprocessed(tmp_path, monkeypatch):
+    """Atmeneti hiba (docs/llm.md) megszakitja a kort: a masodik session ebben
+    a korben nem kerul feldolgozasra, egyik session extract_attempts sem no."""
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+
+    conn = db.connect()
+    first_id = memory._create_session(conn, T0)
+    conn.commit()
+    memory.log_message(conn, first_id, "user", "Elso uzenet", "complete", created_at=T0)
+    conn.execute("UPDATE sessions SET ended_at = ? WHERE id = ?", (T0.isoformat(), first_id))
+    conn.commit()
+
+    second_id = memory._create_session(conn, T0)
+    conn.commit()
+    memory.log_message(conn, second_id, "user", "Masodik uzenet", "complete", created_at=T0)
+    conn.execute("UPDATE sessions SET ended_at = ? WHERE id = ?", (T0.isoformat(), second_id))
+    conn.commit()
+    conn.close()
+
+    fake_client = _FakeClient(
+        raise_exc=genai_errors.ServerError(503, {"message": "overloaded", "status": "UNAVAILABLE"})
+    )
+
+    now = T0 + timedelta(seconds=extractor.EXTRACT_GRACE_SECONDS + 10)
+    asyncio.run(extractor.run_cycle(fake_client, now=now))
+
+    assert fake_client.aio.models.calls == 1
+
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, extracted_at, extract_attempts FROM sessions WHERE id IN (?, ?) ORDER BY id",
+            (first_id, second_id),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert [dict(row) for row in rows] == [
+        {"id": first_id, "extracted_at": None, "extract_attempts": 0},
+        {"id": second_id, "extracted_at": None, "extract_attempts": 0},
+    ]

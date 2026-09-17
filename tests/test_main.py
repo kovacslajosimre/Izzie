@@ -12,7 +12,9 @@ beallitja, valodi .env nelkul is.
 
 import asyncio
 
+import httpx
 import pytest
+from google.genai import errors as genai_errors
 
 from app import db
 
@@ -295,6 +297,101 @@ def test_generate_sends_full_history_and_core_profile_to_gemini(tmp_path, monkey
         ("user", "Mostani kérdés"),
     ]
     assert "A felhasználó neve Lajos." in captured["config"].system_instruction
+
+
+# --- atmeneti/nem-atmeneti hibak (docs/llm.md, 1. szelet) --------------------
+
+
+def _assert_single_error_event_and_no_assistant_row(main_module, events, session_id, expected_message):
+    assert events == [main_module.sse({"type": "error", "message": expected_message})]
+
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT content, status FROM messages WHERE session_id = ? AND role = 'assistant'",
+            (session_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == []
+
+
+def test_generate_sends_overloaded_message_on_503(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+
+    from app import main as main_module
+
+    async def fake_generate_content_stream(**kwargs):
+        raise genai_errors.ServerError(503, {"message": "overloaded", "status": "UNAVAILABLE"})
+
+    monkeypatch.setattr(
+        main_module.client.aio.models, "generate_content_stream", fake_generate_content_stream
+    )
+
+    async def scenario():
+        session_id = await main_module.memory.start_turn("teszt")
+        events = [event async for event in main_module.generate("teszt", session_id)]
+        return session_id, events
+
+    session_id, events = asyncio.run(scenario())
+
+    _assert_single_error_event_and_no_assistant_row(
+        main_module,
+        events,
+        session_id,
+        "A modell most túlterhelt vagy nem elérhető. Próbáld újra egy kicsit később.",
+    )
+
+
+def test_generate_sends_generic_message_on_400(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+
+    from app import main as main_module
+
+    async def fake_generate_content_stream(**kwargs):
+        raise genai_errors.ClientError(400, {"message": "bad request", "status": "INVALID_ARGUMENT"})
+
+    monkeypatch.setattr(
+        main_module.client.aio.models, "generate_content_stream", fake_generate_content_stream
+    )
+
+    async def scenario():
+        session_id = await main_module.memory.start_turn("teszt")
+        events = [event async for event in main_module.generate("teszt", session_id)]
+        return session_id, events
+
+    session_id, events = asyncio.run(scenario())
+
+    _assert_single_error_event_and_no_assistant_row(
+        main_module, events, session_id, "Hiba történt a válasz generálása közben."
+    )
+
+
+def test_generate_sends_generic_message_on_network_error(tmp_path, monkeypatch):
+    """A halozati hiba (pl. kapcsolat megszakad) nem APIError, az altalanos
+    except Exception agba fut - annak is a warning/exception szetvalasztast
+    es a describe_error()-t kell hasznalnia (docs/llm.md)."""
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "izzie.db")
+
+    from app import main as main_module
+
+    async def fake_generate_content_stream(**kwargs):
+        raise httpx.ConnectError("kapcsolat megszakadt")
+
+    monkeypatch.setattr(
+        main_module.client.aio.models, "generate_content_stream", fake_generate_content_stream
+    )
+
+    async def scenario():
+        session_id = await main_module.memory.start_turn("teszt")
+        events = [event async for event in main_module.generate("teszt", session_id)]
+        return session_id, events
+
+    session_id, events = asyncio.run(scenario())
+
+    _assert_single_error_event_and_no_assistant_row(
+        main_module, events, session_id, "Hiba történt a válasz generálása közben."
+    )
 
 
 def test_background_cycle_loop_continues_after_run_cycle_error(tmp_path, monkeypatch):

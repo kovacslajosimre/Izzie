@@ -32,6 +32,9 @@ Kész:
 - Időkorlát a Gemini-hívásokon — chat: első darab és darabok közötti
   időkorlát (`app/main.py`), extractor: teljes hívásra (`app/extractor.py`);
   lásd [docs/client.md](docs/client.md)
+- Átmeneti Gemini-hibák kezelése — közös kliens rövid újrapróbálkozással és
+  hibaosztályozás (`app/llm.py`), chatben felhasználóbarát üzenet, extractorban
+  a kör megszakítása kísérlet-növelés nélkül; lásd [docs/llm.md](docs/llm.md)
 
 Nincs kész: óra/időkontextus, naptár, fájlkeresés, kliens, hang, Docker.
 

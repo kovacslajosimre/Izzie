@@ -26,7 +26,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-from app import memory
+from app import llm, memory
 from app.db import connect
 from app.paths import resolve_path
 
@@ -260,10 +260,13 @@ def _record_failed_attempt(session_id: int) -> None:
         conn.close()
 
 
-async def process_session(client: genai.Client, session_id: int, now: Optional[datetime] = None) -> None:
+async def process_session(client: genai.Client, session_id: int, now: Optional[datetime] = None) -> bool:
     """Egy session feldolgozasa: bemenet betoltese, LLM-hivas, validalas,
     iras. Hiba eseten (API-hiba, ertelmezhetetlen JSON, iras kozbeni hiba)
-    extract_attempts no, extracted_at ures marad."""
+    extract_attempts no, extracted_at ures marad. Atmeneti hiba (429/5xx,
+    idokorlat, halozati hiba) kivetel: nem szamit kiserletnek, es a
+    visszateresi ertek False - ez jelzi a run_cycle-nek, hogy a kor
+    szakadjon meg."""
     now = now or _now()
 
     def _load_and_check() -> tuple[SessionInput, bool]:
@@ -282,14 +285,19 @@ async def process_session(client: genai.Client, session_id: int, now: Optional[d
 
     session_input, done = await asyncio.to_thread(_load_and_check)
     if done:
-        return
+        return True
 
     try:
         result = await _call_llm(client, session_input)
     except Exception as exc:  # noqa: BLE001
+        if llm.is_transient_error(exc):
+            logger.warning(
+                "Extractor atmeneti hiba a(z) %s sessionnel, a kor megszakad: %s", session_id, exc
+            )
+            return False
         logger.warning("Extractor sikertelen kiserlet a(z) %s sessionnel: %s", session_id, exc)
         await asyncio.to_thread(_record_failed_attempt, session_id)
-        return
+        return True
 
     def _write() -> None:
         conn = connect()
@@ -308,10 +316,13 @@ async def process_session(client: genai.Client, session_id: int, now: Optional[d
         logger.exception("Extractor iras sikertelen a(z) %s sessionnel", session_id)
         await asyncio.to_thread(_record_failed_attempt, session_id)
 
+    return True
+
 
 async def run_cycle(client: genai.Client, now: Optional[datetime] = None) -> None:
     """A hatterciklus egy kore: lejart session lezarasa uj nyitasa nelkul,
-    majd a feldolgozatlan sessionok egyenkenti feldolgozasa."""
+    majd a feldolgozatlan sessionok egyenkenti feldolgozasa. Atmeneti hiba
+    eseten a kor megszakad, a tobbi session a kovetkezo korre marad."""
     now = now or _now()
 
     def _prepare() -> list[int]:
@@ -324,4 +335,6 @@ async def run_cycle(client: genai.Client, now: Optional[datetime] = None) -> Non
 
     session_ids = await asyncio.to_thread(_prepare)
     for session_id in session_ids:
-        await process_session(client, session_id, now)
+        should_continue = await process_session(client, session_id, now)
+        if not should_continue:
+            break

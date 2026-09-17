@@ -3,7 +3,8 @@
 A Gemini-hívások közös szabályai (chat és extractor). Később ide kerül a
 provider-réteg (`ask_llm()`) is; most csak a hibakezelés.
 
-Állapot: az 1. szelet spece kész, a megvalósítás következik.
+Állapot: az 1. szelet (átmeneti hibák) megvalósítva — `app/llm.py`, bekötve
+`app/main.py`-ba és `app/extractor.py`-ba.
 
 ## 1. szelet: átmeneti hibák
 
@@ -92,6 +93,12 @@ Naplózás:
   (várt, külső hiba, a traceback csak elfedi a logban a valódi gondokat);
 - minden más: `logger.exception`, mint most.
 
+Ugyanez a szétválasztás vonatkozik az általános `except Exception` ágra is:
+egy hálózati hiba (a kapcsolat nem jött létre vagy megszakadt) nem
+`APIError`, tehát ide fut be, de ugyanúgy külső, átmeneti hiba — a naplózás
+és a kiküldött üzenet (`describe_error()`) módja itt sem térhet el az
+`APIError` ágétól.
+
 A naplózás (`partial`, üres válasz nem kerül be) nem változik.
 
 ### Extractor
@@ -119,7 +126,8 @@ nem égeti a kvótát, és a warning a logban látszik.
   (a kísérletszám és a kódlista), nem az SDK viselkedését.
 - Chat: hamis kliens, ami a stream megnyitásakor `503`-at dob → `error`
   esemény a túlterhelt-üzenettel, nincs assistant-sor. `400` → az
-  általános üzenet.
+  általános üzenet. Hálózati hiba (`httpx.ConnectError`, az `except Exception`
+  ágba fut, nem `APIError`) → szintén az általános üzenet, nincs traceback.
 - Extractor: `503` és időkorlát → `extract_attempts` nem nő, és a második
   session nem kerül hívásra ugyanabban a körben. Hibás JSON és `400` →
   `extract_attempts` nő (a meglévő viselkedés).
