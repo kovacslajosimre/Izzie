@@ -324,3 +324,29 @@ teszt (a `chatClient` hálózati réteg); a füstpróba fedi.
    szerveren egy mesterséges késleltetés — vagy egyszerűbben: a szerver
    folyamatát `kill -STOP`-pal megállítva, majd `kill -CONT`-tal
    folytatva. → „Izzie nem válaszolt időben.” Utána visszaállítás.
+
+A szerver felfüggesztése a gyakorlatban: a tmux ablakban `Ctrl+Z`, folytatás
+`fg`. Ez a `--reload` alatt futó munkafolyamatot is megállítja, PID-keresés
+nélkül.
+
+**Eredmény (2026-09-17):** mindhárom lépés a várt módon működött. A
+jelzés megjelent és eltűnt, a szerver korlátja a saját hibaüzenetét adta,
+a kliens korlátja „Izzie nem válaszolt időben.”-t mutatott (nem
+„Leállítva”-t). A kliens rész kész.
+
+### Megfigyelések a füstpróbából
+
+- **Gemini 503 (túlterhelt modell).** A próba közben a Gemini átmenetileg
+  `503 UNAVAILABLE`-t adott. A kliensben ez az általános „Hiba történt a
+  válasz generálása közben.” üzenetként jelent meg. Pontosabb üzenet kell,
+  pl. „A modell most túlterhelt, próbáld újra később.” A következő szerver
+  oldali körbe.
+- **Megválaszolva (2026-09-17), lásd `docs/llm.md`:** az SDK alapból nem
+  próbálkozik újra, és a stream megnyitása a korláton belül van. Az extractor
+  időkorlátja ott átmeneti hibává válik (nem számít kísérletnek).
+- **Nyitott kérdés: az SDK újrapróbálkozása és az időkorlát.** A
+  `google-genai` 503-ra magától újrapróbálkozik (`tenacity`, növekvő
+  várakozással). Nem ellenőriztük, hogy ez a várakozás teljes egészében a
+  szerver `FIRST_CHUNK_TIMEOUT_SECONDS` korlátja alá esik-e. A 503-as
+  hibaüzenet javításakor ezt is meg kell nézni (és eldönteni, kell-e az SDK
+  saját újrapróbálkozása egyáltalán, ha a korlát úgyis lezárja a kérést).

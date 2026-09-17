@@ -457,7 +457,8 @@ tény tartalma nem változik, csak a leváltás tényét rögzítjük.
 `extract_attempts` nő, és a következő körben újra próbálkozunk. Háromszor
 bukott session után warning a logba, és kimarad — egy tartósan hibás session
 ne égesse a kvótát. Újrafuttatni kézzel lehet, az `extract_attempts`
-nullázásával.
+nullázásával. Átmeneti hiba (`429`, `5xx`, időkorlát, hálózat)
+nem számít kísérletnek, és megszakítja a kört — lásd `docs/llm.md`.
 
 **Az extractor-prompt fájlban él:** `prompts/extractor.md`, az
 `IZZIE_EXTRACTOR_PROMPT` env var-ral felülírható, az `IZZIE_PERSONA`
