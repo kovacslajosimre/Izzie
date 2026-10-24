@@ -2,8 +2,9 @@
 
 Állapot: a szerver-előkészítés, az 1. szelet (chatablak) és a 2. szelet
 (várakozás és időkorlátok) kész és élesben tesztelt. A 3. szelet
-(előzmény betöltése) spece kész, a megvalósítás következik. 2026 októberében a
-fejlesztés Ubuntura költözött, lásd „Költözés Ubuntura”.
+(előzmény betöltése) szerver része (`GET /history`) kész, a kliens rész
+következik. 2026 októberében a fejlesztés Ubuntura költözött, lásd
+„Költözés Ubuntura”.
 
 ## Felállás
 

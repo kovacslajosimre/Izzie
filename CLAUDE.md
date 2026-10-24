@@ -36,6 +36,10 @@ Kész:
 - Átmeneti Gemini-hibák kezelése — közös kliens rövid újrapróbálkozással és
   hibaosztályozás (`app/llm.py`), chatben felhasználóbarát üzenet, extractorban
   a kör megszakítása kísérlet-növelés nélkül; lásd [docs/llm.md](docs/llm.md)
+- Előzmény-lekérdezés a kliensnek — `GET /history`, a legutóbbi `limit`
+  üzenet sessionöktől függetlenül, mellékhatás nélkül (nem nyit és nem zár
+  le sessiont); `app/memory.py`, `app/main.py`; lásd
+  [docs/client.md](docs/client.md)
 
 A kliens (külön repó): chatablak streameléssel, „gondolkodik” jelzés,
 kliensoldali időkorlát; lásd [docs/client.md](docs/client.md).

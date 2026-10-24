@@ -212,6 +212,51 @@ def test_get_history_respects_limit(conn):
     assert [m["content"] for m in history] == ["uzenet-3", "uzenet-4"]
 
 
+def test_get_recent_messages_orders_across_sessions_and_filters_redacted(conn):
+    session_id = memory.resolve_session(conn, now=T0)
+    other_session_id = memory._create_session(conn, T0 + timedelta(seconds=10))
+    conn.commit()
+
+    memory.log_message(conn, session_id, "user", "elso", "complete", created_at=T0)
+    redacted_id = memory.log_message(
+        conn, session_id, "user", "titkos", "complete", created_at=T0 + timedelta(seconds=1)
+    )
+    conn.execute(
+        "UPDATE messages SET redacted_at = ? WHERE id = ?", (_format(T0), redacted_id)
+    )
+    memory.log_message(
+        conn,
+        other_session_id,
+        "assistant",
+        "reszleges",
+        "partial",
+        created_at=T0 + timedelta(seconds=11),
+    )
+
+    messages = memory.get_recent_messages(conn, limit=10)
+
+    assert [(m["session_id"], m["role"], m["content"], m["status"]) for m in messages] == [
+        (session_id, "user", "elso", "complete"),
+        (other_session_id, "assistant", "reszleges", "partial"),
+    ]
+
+
+def test_get_recent_messages_respects_limit(conn):
+    session_id = memory.resolve_session(conn, now=T0)
+    for i in range(5):
+        memory.log_message(
+            conn, session_id, "user", f"uzenet-{i}", "complete", created_at=T0 + timedelta(seconds=i)
+        )
+
+    messages = memory.get_recent_messages(conn, limit=2)
+
+    assert [m["content"] for m in messages] == ["uzenet-3", "uzenet-4"]
+
+
+def test_get_recent_messages_empty_db_returns_empty_list(conn):
+    assert memory.get_recent_messages(conn, limit=50) == []
+
+
 def test_core_profile_excludes_non_active_and_non_pinned(conn):
     _insert_fact(conn, kind="identity", content="pinned aktiv", pinned=1)
     _insert_fact(conn, kind="identity", content="pinned de superseded", pinned=1, superseded_by=999)

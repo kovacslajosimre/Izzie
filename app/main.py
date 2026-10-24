@@ -3,10 +3,10 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from google.genai import errors as genai_errors
@@ -99,6 +99,19 @@ protected_router = APIRouter(dependencies=[Depends(auth.require_token)])
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
+
+
+class HistoryMessage(BaseModel):
+    id: int
+    session_id: int
+    role: Literal["user", "assistant"]
+    content: str
+    status: Literal["complete", "partial"]
+    created_at: str
+
+
+class HistoryResponse(BaseModel):
+    messages: list[HistoryMessage]
 
 
 def sse(event: dict) -> str:
@@ -288,6 +301,16 @@ async def chat(req: ChatRequest):
             "X-Accel-Buffering": "no",  # nginx ne pufferelje, ha egyszer moge kerul
         },
     )
+
+
+@protected_router.get("/history", response_model=HistoryResponse)
+async def history(limit: int = Query(default=50, ge=1, le=200)):
+    try:
+        messages = await memory.load_recent_messages(limit)
+    except Exception:
+        logger.exception("Varatlan hiba a /history vegpontban")
+        raise HTTPException(status_code=500)
+    return HistoryResponse(messages=messages)
 
 
 app.include_router(protected_router)

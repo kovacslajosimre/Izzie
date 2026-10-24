@@ -168,6 +168,23 @@ def get_history(
     return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
 
 
+def get_recent_messages(conn: sqlite3.Connection, limit: int) -> list[dict]:
+    """A legutobbi `limit` uzenet, sessionoktol fuggetlenul, idorendben
+    (a legregebbi elol). A redaktalt uzenetek (redacted_at IS NOT NULL)
+    kimaradnak. A 'partial' uzenetek bent maradnak, a statuszukkal.
+
+    A GET /history vegpont adatforrasa - nem az aktualis sessionre szukit,
+    mert a felhasznalo a korabbi beszelgeteseket is latni akarja.
+    """
+    rows = conn.execute(
+        "SELECT id, session_id, role, content, status, created_at FROM messages "
+        "WHERE redacted_at IS NULL "
+        "ORDER BY created_at DESC, id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in reversed(rows)]
+
+
 @dataclass
 class Fact:
     id: int
@@ -347,3 +364,18 @@ async def log_assistant_message(session_id: int, content: str, status: str) -> N
             conn.close()
 
     await asyncio.to_thread(_work)
+
+
+async def load_recent_messages(limit: int) -> list[dict]:
+    """A GET /history vegpont adatforrasa. Csak olvas: nem nyit sessiont es
+    nem zar le lejartat (nem hivja a resolve_session-t es a
+    close_expired_sessions-t)."""
+
+    def _work() -> list[dict]:
+        conn = connect()
+        try:
+            return get_recent_messages(conn, limit)
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_work)
