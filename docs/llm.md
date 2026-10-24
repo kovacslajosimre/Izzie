@@ -3,8 +3,9 @@
 A Gemini-hívások közös szabályai (chat és extractor). Később ide kerül a
 provider-réteg (`ask_llm()`) is; most csak a hibakezelés.
 
-Állapot: az 1. szelet (átmeneti hibák) megvalósítva — `app/llm.py`, bekötve
-`app/main.py`-ba és `app/extractor.py`-ba.
+Állapot: az 1. szelet (átmeneti hibák) kész és élesben tesztelt
+(2026-10-24) — `app/llm.py`, bekötve `app/main.py`-ba és
+`app/extractor.py`-ba.
 
 ## 1. szelet: átmeneti hibák
 
@@ -141,3 +142,8 @@ túlterhelésnél a logban és a kliensben is látszani fog.
    nem rontott el semmit).
 2. Átmenetileg hibás modellnév (`MODEL_NAME`) → a kliensben az általános
    üzenet, a logban traceback (nem átmeneti hiba). Utána visszaállítás.
+
+**Eredmény (2026-10-24):** mindkét lépés a várt módon működött. A normál
+beszélgetés rendben ment. Hibás modellnévvel a kliensben azonnal az általános
+üzenet jelent meg (nem a túlterhelt-üzenet), a logban a `404 NOT_FOUND`
+teljes tracebackkel. A visszaállítás után Izzie újra válaszolt.
