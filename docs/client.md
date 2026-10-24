@@ -1,7 +1,8 @@
 # Kliens
 
 Állapot: a szerver-előkészítés, az 1. szelet (chatablak) és a 2. szelet
-(várakozás és időkorlátok) kész és élesben tesztelt. 2026 októberében a
+(várakozás és időkorlátok) kész és élesben tesztelt. A 3. szelet
+(előzmény betöltése) spece kész, a megvalósítás következik. 2026 októberében a
 fejlesztés Ubuntura költözött, lásd „Költözés Ubuntura”.
 
 ## Felállás
@@ -378,3 +379,133 @@ A laptop Windowsról Ubuntura váltott. Ami ebből következik:
   megjegyzése) bekerült a `tauri://localhost`. A `http://tauri.localhost`
   maradt (Android). `tauri dev` alatt nem számít, az első `tauri build`
   előtt kell.
+
+## 3. szelet: előzmény betöltése
+
+### Miért
+
+A kliens minden indításkor üres ablakkal nyit, pedig Izzie emlékszik: a
+beszélgetés a szerveren él. Indításkor a kliens töltse be a legutóbbi
+üzeneteket, hogy ott folytatódjon, ahol abbamaradt.
+
+Két rész, két repóban: előbb a szerver, utána a kliens.
+
+### Szerver: `GET /history`
+
+**Végpont.** `GET /history?limit=50`, a `protected_router`-en (tokennel).
+JSON-t ad, nem SSE-t: egyszeri, kis válasz, nincs mit streamelni.
+
+```json
+{
+  "messages": [
+    {
+      "id": 812,
+      "session_id": 37,
+      "role": "user",
+      "content": "Szia Izzie!",
+      "status": "complete",
+      "created_at": "2026-10-24T17:30:12+00:00"
+    }
+  ]
+}
+```
+
+- **A legutóbbi `limit` üzenet, sessionöktől függetlenül**, időrendben (a
+  legrégebbi elöl). Nem csak az aktuális session: a felhasználó a korábbi
+  beszélgetéseket is látni akarja, akkor is, ha Izzie azokra már csak a
+  tényeken és az összefoglalón át emlékszik.
+- `limit`: alapértelmezés 50, megengedett 1–200. Ezen kívül `422`
+  (FastAPI `Query(ge=1, le=200)`).
+- **A redaktált üzenetek kimaradnak**, a `partial`-ok bent maradnak a
+  státuszukkal — ugyanaz a szabály, mint a `get_history()`-ban.
+- Sorrend: `created_at`, azonos időnél `id` szerint — a `get_history()`
+  mintájára.
+- A `created_at` úgy megy ki, ahogy a DB-ben van (ISO 8601, UTC). A
+  megjelenítés a kliens dolga.
+
+**Mellékhatás nincs.** A végpont csak olvas: nem nyit sessiont, nem zár le
+lejártat (`resolve_session` és `close_expired_sessions` nem hívódik), és
+nem ír semmit. Egy kliens-indítás így nem befolyásolja, mikor kezdődik új
+beszélgetés.
+
+**Hol él.** A lekérdezés a `memory.py`-ban (pl.
+`get_recent_messages(conn, limit)`, a többi lekérdező mintájára
+kapcsolatot kap), mellé egy async belépési pont, ami `to_thread`-ben fut.
+A `main.py`-ban csak a végpont és a bekötés.
+
+**Hibák.** DB-hiba esetén `500`, a részletek csak a logba kerülnek, a
+válaszba nem.
+
+**Tesztek.**
+
+- lekérdezés: több session üzenetei időrendben; a `limit` a legutolsó N-et
+  tartja meg; redaktált kimarad; `partial` bent marad a státuszával; üres
+  DB → üres lista
+- végpont: token nélkül `401`; alapértelmezett `limit`; `limit=0` és
+  `limit=201` → `422`
+- **a hívás nem hoz létre sessiont** (a `sessions` sorainak száma nem
+  változik) — ez a szelet egyik lényege, ezért külön teszt
+
+### Kliens: betöltés indításkor
+
+**Hálózat.** A `chatClient.ts` mellé egy `fetchHistory()` (vagy hasonló),
+ugyanazzal a címmel és tokennel. A hibák osztályozása ugyanaz, mint a
+chatnél (`401`, más státusz, hálózati hiba, a `ChatRequestError`
+újrahasznosítható). **Időkorlát: 15 másodperc** a teljes kérésre — a 2.
+szelet tanulsága, hogy semmi ne várjon örökké.
+
+**Átalakítás: tiszta függvény, külön modulban** (pl. `src/history.ts`). A
+szerver üzeneteiből a felület elemeit állítja elő, Reacttől és hálózattól
+függetlenül:
+
+- `role`: `user` → felhasználó, `assistant` → Izzie.
+- `complete` → kész üzenet. `partial` → kész, de **„Félbemaradt”**
+  jelöléssel. (A szerver nem tárolja, hogy leállítás, megszakadás vagy
+  időkorlát volt-e az ok, ezért egy közös felirat.)
+- Az azonosító a szerverét követi (pl. `srv-812`), hogy ne ütközzön a
+  kliens saját `crypto.randomUUID()` azonosítóival.
+- **Session-elválasztó:** minden session első betöltött üzenete elé egy
+  elválasztó kerül a dátummal és idővel, helyi időben, magyarul (pl.
+  „2026. október 24. 19:30”, `Intl.DateTimeFormat("hu-HU", …)`). A lista
+  elején is van egy. Az elválasztó azt is jelzi, hol kezdődik egy új
+  beszélgetés, amire Izzie már nem szó szerint emlékszik.
+
+**Állapot és felület.**
+
+- Betöltés közben a lista helyén halvány „Előzmény betöltése…” felirat,
+  és **a küldés tiltva**. Ha közben elküldhető lenne egy üzenet, az
+  előzmény fölé kerülne, és a sorrend összekeveredne.
+- Siker: az előzmény bekerül a listába, az aljára görget (a meglévő
+  görgetés ezt lefedi).
+- Hiba: a lista tetején halvány hibasor, pl. „Az előzményt nem sikerült
+  betölteni: <ok>.” **A küldés ilyenkor is működik**: az előzmény hiánya
+  nem akadálya a beszélgetésnek. Újrapróbálás gomb nincs, az újraindítás
+  megoldja.
+- Az új üzenetek az előzmény alá kerülnek, elválasztó nélkül.
+
+**Buktató: `StrictMode`.** Fejlesztéskor a React az effekteket kétszer
+futtatja. Az effekt ezért `AbortController`-rel takarítson maga után,
+különben két kérés indul, és az előzmény kétszer kerülhet be a listába.
+
+**Ismert korlát, szándékosan.** Ha egy válasz nem került a naplóba (üres
+leállítás vagy hiba még az első szó előtt), az előzményben a felhasználó
+üzenete válasz nélkül áll. Ez a napló valós állapota, nem töltjük ki.
+
+**Tesztek.** Vitest az átalakító függvényre: üres bemenet; egy session
+(egy elválasztó, utána az üzenetek); két session (két elválasztó, jó
+helyen); a szerepkörök leképezése; `partial` jelölése; a sorrend
+megmarad; az azonosítók. A dátum formázása időzónától függ: a teszt vagy
+rögzített időzónával fut, vagy a formázó külön függvény, és a
+szerkezeti tesztek nem a formázott szövegre építenek.
+
+### Füstpróba
+
+1. A kliens indítása: megjelenik az előzmény, elválasztókkal, alul a
+   legutóbbi üzenettel.
+2. Egy új üzenet: az előzmény alá kerül, Izzie válaszol.
+3. A kliens újraindítása: az előző lépés üzenete is ott van.
+4. Leállított uvicorn mellett indítva: a hibasor megjelenik, a felület
+   használható (a küldés a szerver nélkül persze hibát ad).
+5. A sessionök száma a kliens indítása előtt és után nem változik. A
+   szerveren, a projekt mappájában:
+   `venv/bin/python -c "import sqlite3; print(sqlite3.connect('data/izzie.db').execute('SELECT COUNT(*) FROM sessions').fetchone()[0])"`
