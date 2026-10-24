@@ -373,8 +373,8 @@ A laptop Windowsról Ubuntura váltott. Ami ebből következik:
   ugyanaz a jelenség, mint a ProtonVPN-nél; a megoldás a `100.64.0.0/10`
   tartomány kivétele (NordVPN Linuxon: `nordvpn allowlist add subnet
   100.64.0.0/10`). Még nem próbáltuk ki.
-- **CORS (kódváltozás, nyitott):** az alapértelmezett eredetek közé
+- **CORS (kész):** az alapértelmezett eredetek közé
   (`_DEFAULT_CORS_ORIGINS` az `app/main.py`-ban, és az `.env.example`
-  megjegyzése) bekerül a `tauri://localhost`. A `http://tauri.localhost`
-  marad (Android). `tauri dev` alatt nem számít, az első `tauri build`
+  megjegyzése) bekerült a `tauri://localhost`. A `http://tauri.localhost`
+  maradt (Android). `tauri dev` alatt nem számít, az első `tauri build`
   előtt kell.

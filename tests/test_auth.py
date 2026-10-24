@@ -91,6 +91,22 @@ def test_cors_preflight_passes_without_token(tmp_path, monkeypatch):
     assert response.headers["access-control-allow-origin"] == "http://localhost:1420"
 
 
+def test_cors_preflight_from_tauri_origin_passes(tmp_path, monkeypatch):
+    """A lefordított alkalmazás eredete (Linux, macOS) is az alapértelmezésben van."""
+    _, client = _client(tmp_path, monkeypatch)
+
+    response = client.options(
+        "/chat",
+        headers={
+            "Origin": "tauri://localhost",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "tauri://localhost"
+
+
 def test_401_response_has_cors_headers(tmp_path, monkeypatch):
     _, client = _client(tmp_path, monkeypatch)
 

@@ -70,7 +70,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Izzie Brain", lifespan=lifespan)
 
-_DEFAULT_CORS_ORIGINS = ["http://localhost:1420", "http://tauri.localhost"]
+_DEFAULT_CORS_ORIGINS = [
+    "http://localhost:1420",
+    "tauri://localhost",
+    "http://tauri.localhost",
+]
 
 
 def _load_cors_origins() -> list[str]:
