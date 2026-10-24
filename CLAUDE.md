@@ -8,7 +8,8 @@ alakítja, még ha a hang és az arc még nincs is kész.
 ## Architektúra
 
 - **Brain** — Python / FastAPI, a szerveren fut. Ez a repo.
-- **Kliens** — Tauri (Windows / Linux / Android), vékony, csak megjelenít. Még nem létezik.
+- **Kliens** — Tauri (asztali, később Android), vékony, csak megjelenít. Külön
+  repó: `kovacslajosimre/Izzie-client`; spec: [docs/client.md](docs/client.md).
 - **LLM** — Google Gemini API (`google-genai`), modell: `gemini-3.6-flash`.
 - **Adat** — SQLite. Az útvonalat az `IZZIE_DB_PATH` env var adja meg, az
   `IZZIE_PERSONA` mintájára. Fejlesztésben alapértelmezés a `data/izzie.db`
@@ -36,7 +37,10 @@ Kész:
   hibaosztályozás (`app/llm.py`), chatben felhasználóbarát üzenet, extractorban
   a kör megszakítása kísérlet-növelés nélkül; lásd [docs/llm.md](docs/llm.md)
 
-Nincs kész: óra/időkontextus, naptár, fájlkeresés, kliens, hang, Docker.
+A kliens (külön repó): chatablak streameléssel, „gondolkodik” jelzés,
+kliensoldali időkorlát; lásd [docs/client.md](docs/client.md).
+
+Nincs kész: óra/időkontextus, naptár, fájlkeresés, hang, Docker.
 
 A pontos állapotot a kód és a `git log` mondja meg, nem ez a szakasz. Ha eltérést
 találsz a kód és az itt leírtak között, azt jelezd, ne csendben igazodj hozzá.
@@ -110,11 +114,18 @@ előbb kérdezz.
 ## Specek
 
 - Memória modul: [docs/memory.md](docs/memory.md)
+- Kliens és a szerver kliens felé eső része (token, CORS, időkorlátok):
+  [docs/client.md](docs/client.md)
+- LLM-hívások közös szabályai (hibakezelés): [docs/llm.md](docs/llm.md)
 
 ## Futtatás
 
 ```
 cd ~/projects/Izzie
 source venv/bin/activate
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --reload-dir app --host 100.84.192.48
 ```
+
+tmuxban (`tmux new -s izzie`), hogy egy SSH-szakadás ne állítsa le. A
+`--host` a Tailscale-cím (lásd docs/client.md), a `--reload-dir app` miatt
+a tesztek és a specek szerkesztése nem indítja újra a szervert.

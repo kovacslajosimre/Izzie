@@ -1,16 +1,16 @@
 # Kliens
 
-Állapot: a Tauri váz kész (`kovacslajosimre/Izzie-client`), a szerver
-előkészítése (token, CORS, Tailscale) kész és élesben tesztelt. A kliens
-szeletei ezután kerülnek ide.
+Állapot: a szerver-előkészítés, az 1. szelet (chatablak) és a 2. szelet
+(várakozás és időkorlátok) kész és élesben tesztelt. 2026 októberében a
+fejlesztés Ubuntura költözött, lásd „Költözés Ubuntura”.
 
 ## Felállás
 
 - **Kliens:** Tauri 2 + React + TypeScript, külön repóban
-  (`kovacslajosimre/Izzie-client`), a laptopon a vaulton kívül
-  (`C:\Users\LamaLT\projects\Izzie-client`). Azért nem a vaultban, mert a
-  `node_modules` és a Rust `target` mappája több gigabájt és több tízezer
-  fájl: a git kiszűri, az Obsidian nem.
+  (`kovacslajosimre/Izzie-client`). A laptopon a két repó egymás mellett
+  él: `~/Documents/Project Izzie/Izzie` (ez a repó) és
+  `~/Documents/Project Izzie/Izzie-Client`. A kliensből a spec tehát
+  `../Izzie/docs/client.md`.
 - **Identifier:** `com.kovacslajosimre.izzie`. Beleég a telepítőbe és az
   alkalmazás adatmappájának útvonalába — nem változtatjuk.
 - **Hálózat:** a gépek Tailscale-en érik el egymást. A szerver címe
@@ -64,7 +64,9 @@ címen lévő szerverrel beszéljen, hacsak a szerver ki nem mondja, hogy
 elfogadja. Megengedett eredetek:
 
 - `http://localhost:1420` — fejlesztés közben (Vite)
-- `http://tauri.localhost` — a lefordított alkalmazás Windowson
+- `tauri://localhost` — a lefordított alkalmazás Linuxon (és macOS-en)
+- `http://tauri.localhost` — a lefordított alkalmazás Windowson és
+  Androidon
 
 Az `IZZIE_CORS_ORIGINS` env var-ral felülírható (vesszővel elválasztva).
 Metódusok: `GET`, `POST`. Fejlécek: `Authorization`, `Content-Type`.
@@ -108,7 +110,10 @@ tmuxban (`tmux new -s izzie`), hogy egy SSH-szakadás ne állítsa le. A
 `--reload` a `.env` változását nem veszi észre: token-csere után kézi
 újraindítás kell.
 
-### Ismert buktató: ProtonVPN a laptopon
+### Ismert buktató: VPN a laptopon
+
+(A ProtonVPN azóta nincs használatban; a tanulság más VPN-re is érvényes,
+lásd „Költözés Ubuntura”.)
 
 Bekapcsolt ProtonVPN mellett a Tailscale-címekre menő forgalom a laptopon
 elakad: a kapcsolat 1-2 ms alatt elutasításra kerül, miközben a
@@ -132,8 +137,8 @@ szavanként megjelenik, ahogy a szerver küldi. Semmi más.
   kérés helyett.
 - **Ismert korlát, szándékosan:** a `VITE_` változók build-kor beleégnek a
   JavaScriptbe. Fejlesztéshez ez elfogadható, kiadott alkalmazáshoz nem. Az
-  első `tauri build` előtt a token a Windows jelszótárába költözik (külön
-  szelet).
+  első `tauri build` előtt a token az operációs rendszer jelszótárába
+  költözik (Linuxon a Secret Service, pl. GNOME Keyring; külön szelet).
 
 ### Hálózat: a webview `fetch`-je
 
@@ -350,3 +355,26 @@ a kliens korlátja „Izzie nem válaszolt időben.”-t mutatott (nem
   szerver `FIRST_CHUNK_TIMEOUT_SECONDS` korlátja alá esik-e. A 503-as
   hibaüzenet javításakor ezt is meg kell nézni (és eldönteni, kell-e az SDK
   saját újrapróbálkozása egyáltalán, ha a korlát úgyis lezárja a kérést).
+
+## Költözés Ubuntura (2026-10-24)
+
+A laptop Windowsról Ubuntura váltott. Ami ebből következik:
+
+- **Útvonalak:** lásd „Felállás”. A specek sima fájlok ebben a repóban,
+  Obsidian nélkül.
+- **Rust-gyorsítótár áthelyezés után:** a `src-tauri/target` abszolút
+  útvonalakat tárol. Ha a kliens mappája elköltözik, az első fordítás
+  „failed to read plugin permissions” hibával bukik. Megoldás:
+  `cargo clean` a `src-tauri`-ban.
+- **GitHub-hozzáférés a laptopon:** `gh auth login` (HTTPS, böngészős
+  bejelentkezés). A szerver továbbra is SSH-t használ.
+- **VPN:** a ProtonVPN helyett NordVPN van, nem mindig bekapcsolva. Ha
+  bekapcsolt NordVPN mellett a kliens nem éri el a szervert, valószínűleg
+  ugyanaz a jelenség, mint a ProtonVPN-nél; a megoldás a `100.64.0.0/10`
+  tartomány kivétele (NordVPN Linuxon: `nordvpn allowlist add subnet
+  100.64.0.0/10`). Még nem próbáltuk ki.
+- **CORS (kódváltozás, nyitott):** az alapértelmezett eredetek közé
+  (`_DEFAULT_CORS_ORIGINS` az `app/main.py`-ban, és az `.env.example`
+  megjegyzése) bekerül a `tauri://localhost`. A `http://tauri.localhost`
+  marad (Android). `tauri dev` alatt nem számít, az első `tauri build`
+  előtt kell.
